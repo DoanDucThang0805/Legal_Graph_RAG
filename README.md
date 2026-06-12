@@ -46,22 +46,45 @@ docker compose down -v
 
 Hệ thống được xây dựng theo kiến trúc GraphRAG cho bài toán hỏi đáp pháp lý.
 
-Pipeline chính:
+Pipeline xử lý tri thức:
 
 ```text
 Knowledge Data
       │
       ▼
-Knowledge Processing
+Document Loading
       │
       ▼
-Embedding Model
+Chunking
       │
       ▼
-Neo4j Vector Database
+Entity Extraction
+      │
+      ▼
+Graph Construction
+      │
+      ▼
+Embedding Generation
+      │
+      ▼
+Neo4j Graph + Vector Database
+```
+
+Pipeline hỏi đáp:
+
+```text
+User Question
+      │
+      ▼
+Embedding
       │
       ▼
 Hybrid Retrieval
+      ├── Vector Retrieval
+      └── Graph Retrieval
+      │
+      ▼
+Context Building
       │
       ▼
 LLM Generation
@@ -80,45 +103,51 @@ AIGURU/
 ├── backend/
 │   │
 │   ├── api/
-│   │   └── Chứa các API endpoint của hệ thống
+│   │   └── API endpoints
 │   │
 │   ├── config/
 │   │   └── config.yaml
-│   │       Chứa các cấu hình dùng chung cho toàn bộ pipeline
 │   │
 │   ├── infrastructures/
 │   │   │
 │   │   ├── database/
 │   │   │   └── neo4j_db/
-│   │   │       Kết nối và thao tác với Neo4j
 │   │   │
 │   │   ├── embedding_models/
-│   │   │   Chứa các mô hình embedding
 │   │   │
 │   │   └── gen_llm_models/
-│   │       Chứa các mô hình sinh văn bản (LLM)
+│   │
+│   ├── models/
+│   │   ├── document.py
+│   │   ├── chunk.py
+│   │   ├── entity.py
+│   │   └── relation.py
+│   │
+│   ├── schemas/
+│   │   ├── chat.py
+│   │   ├── ingest.py
+│   │   └── retrieval.py
 │   │
 │   ├── knowledge_processing/
-│   │   Xử lý dữ liệu tri thức
-│   │   (chunking, cleaning, entity extraction,
-│   │    graph building, indexing,...)
+│   │   ├── document_loader.py
+│   │   ├── chunker.py
+│   │   ├── entity_extractor.py
+│   │   ├── graph_builder.py
+│   │   ├── embedder.py
+│   │   └── index_builder.py
 │   │
 │   ├── knowledge_data/
-│   │   Kho dữ liệu pháp lý đầu vào
 │   │
 │   └── retrieval/
+│       ├── vector_retrieval.py
+│       ├── graph_retrieval.py
 │       └── hybrid_retrieval.py
-│       Thành phần truy xuất dữ liệu
-│       từ Vector Search và Graph Search
 │
 ├── frontend/
-│   Giao diện người dùng
 │
 ├── .env
-│   Biến môi trường của dự án
 │
 ├── docker-compose.yml
-│   Khởi tạo Neo4j và các service liên quan
 │
 └── README.md
 ```
@@ -129,17 +158,19 @@ AIGURU/
 
 ### Config
 
-Quản lý toàn bộ cấu hình của hệ thống:
+Quản lý cấu hình của toàn bộ hệ thống:
 
 * Neo4j
-* Embedding Model
-* LLM
+* Embedding Models
+* LLM Models
 * Retrieval Parameters
-* Pipeline Settings
+* GraphRAG Parameters
+
+---
 
 ### Knowledge Data
 
-Lưu trữ dữ liệu pháp lý:
+Kho dữ liệu pháp lý đầu vào:
 
 * Luật
 * Nghị định
@@ -147,30 +178,78 @@ Lưu trữ dữ liệu pháp lý:
 * Án lệ
 * Văn bản hướng dẫn
 
+---
+
+### Models
+
+Định nghĩa các thực thể (domain models) của Knowledge Graph.
+
+Ví dụ:
+
+* Document
+* Chunk
+* Entity
+* Relation
+
+Các model này mô tả cấu trúc dữ liệu được lưu trong Neo4j.
+
+Ví dụ:
+
+```text
+(Document)
+(Chunk)
+(Entity)
+(Relation)
+```
+
+---
+
+### Schemas
+
+Định nghĩa dữ liệu trao đổi qua API.
+
+Ví dụ:
+
+* ChatRequest
+* ChatResponse
+* IngestRequest
+* RetrievalResponse
+
+Sử dụng Pydantic để validate dữ liệu đầu vào và đầu ra.
+
+---
+
 ### Knowledge Processing
 
-Chịu trách nhiệm chuyển đổi dữ liệu thô thành dữ liệu có thể truy xuất:
+Pipeline xây dựng kho tri thức.
+
+Bao gồm:
 
 * Đọc tài liệu
 * Tiền xử lý văn bản
 * Chunking
-* Sinh embedding
 * Trích xuất thực thể
 * Xây dựng Knowledge Graph
-* Index dữ liệu vào Neo4j
+* Sinh embedding
+* Tạo Vector Index
+* Lưu dữ liệu vào Neo4j
+
+---
 
 ### Database
 
 Tầng kết nối cơ sở dữ liệu.
 
-Hiện tại:
+Hiện tại sử dụng:
 
 * Neo4j Graph Database
 * Neo4j Vector Index
 
+---
+
 ### Embedding Models
 
-Quản lý các mô hình embedding:
+Quản lý các mô hình embedding.
 
 Ví dụ:
 
@@ -179,9 +258,11 @@ Ví dụ:
 * GTE
 * Nomic
 
+---
+
 ### Gen LLM Models
 
-Quản lý các mô hình sinh phản hồi:
+Quản lý các mô hình sinh phản hồi.
 
 Ví dụ:
 
@@ -190,21 +271,33 @@ Ví dụ:
 * Qwen
 * Llama
 
+---
+
 ### Retrieval
 
 Truy xuất tri thức phục vụ chatbot.
 
 Bao gồm:
 
-* Vector Retrieval
-* Graph Retrieval
-* Hybrid Retrieval
+#### Vector Retrieval
+
+Tìm kiếm ngữ nghĩa dựa trên embedding.
+
+#### Graph Retrieval
+
+Tìm kiếm theo quan hệ trong Knowledge Graph.
+
+#### Hybrid Retrieval
+
+Kết hợp Vector Search và Graph Traversal để xây dựng context tối ưu cho LLM.
+
+---
 
 ### API
 
 Cung cấp endpoint cho frontend và các service bên ngoài.
 
-```
+```http
 POST /chat
 POST /ingest
 GET /health
@@ -212,17 +305,57 @@ GET /health
 
 ---
 
-## 5. Database
+## 5. Graph Schema (Draft)
+
+Schema ban đầu của hệ thống:
+
+```text
+(Document)
+      │
+      └── HAS_CHUNK
+                │
+                ▼
+             (Chunk)
+                │
+                └── MENTIONS
+                          │
+                          ▼
+                       (Entity)
+```
+
+Ví dụ:
+
+```text
+Document
+├── id
+├── title
+└── source
+
+Chunk
+├── id
+├── content
+├── embedding
+└── chunk_index
+
+Entity
+├── id
+├── name
+└── entity_type
+```
+
+---
+
+## 6. Database
 
 Neo4j được sử dụng đồng thời cho:
 
 * Graph Database
 * Vector Database
 
-Thông tin kết nối được cấu hình trong file `.env`.
-
 Truy cập Neo4j Browser:
 
 ```text
 http://localhost:7474
 ```
+
+Thông tin kết nối được cấu hình trong file `.env`.
