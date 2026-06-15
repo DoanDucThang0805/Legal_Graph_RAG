@@ -1,3 +1,4 @@
 backend/venv/
 backend/knowledge_data
 .env
+.venv 

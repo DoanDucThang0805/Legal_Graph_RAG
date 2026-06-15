@@ -1,0 +1,53 @@
+retrieval:
+  fusion: rrf
+  rrf_k: 60
+
+  top_k:
+    default: 100
+    legal_bm25: 80
+    legal_dense: 80
+    phapdien_bm25: 50
+    phapdien_dense: 50
+    exact: 30
+    rerank: 100
+
+  article_selection:
+    default_max_articles: 7
+    deadline_max_articles: 4
+    amount_max_articles: 4
+    accounting_account_max_articles: 4
+    yes_no_max_articles: 5
+    procedure_max_articles: 7
+    dossier_max_articles: 7
+    sanction_max_articles: 6
+    conditions_max_articles: 8
+    obligations_max_articles: 8
+    multi_hop_max_articles: 12
+
+  modes:
+    balanced:
+      legal_bm25_top_k: 80
+      legal_dense_top_k: 80
+      phapdien_bm25_top_k: 50
+      phapdien_dense_top_k: 50
+      exact_top_k: 30
+      rerank_top_k: 100
+      final_top_k_default: 7
+    recall:
+      legal_bm25_top_k: 120
+      legal_dense_top_k: 120
+      phapdien_bm25_top_k: 80
+      phapdien_dense_top_k: 80
+      exact_top_k: 50
+      rerank_top_k: 150
+      final_top_k_default: 10
+      multi_hop_max_articles: 14
+    precision:
+      legal_bm25_top_k: 50
+      legal_dense_top_k: 50
+      phapdien_bm25_top_k: 30
+      phapdien_dense_top_k: 30
+      exact_top_k: 20
+      rerank_top_k: 50
+      final_top_k_default: 5
+      multi_hop_max_articles: 8

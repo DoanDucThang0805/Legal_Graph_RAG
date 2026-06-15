@@ -14,12 +14,12 @@ datasets==3.2.0
 
 # ── Text matching / normalization ────────────────────────────────────────────
 rapidfuzz>=3.10,<4.0
-pyvi==0.1.1
-underthesea==6.8.4
+# pyvi==0.1.1
+# underthesea==6.8.4
 
 # ── Embeddings / Reranking / LLM local ───────────────────────────────────────
 sentence-transformers==3.3.1
-transformers==4.47.3
+transformers==4.47.1
 accelerate==1.2.1
 einops==0.8.0
 huggingface-hub==0.27.0

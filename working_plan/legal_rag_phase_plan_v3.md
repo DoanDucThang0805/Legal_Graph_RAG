@@ -243,10 +243,10 @@ tests/
 ### Acceptance Criteria
 
 ```text
-[ ] Tất cả folder mục tiêu tồn tại.
-[ ] Các Python package có __init__.py.
-[ ] Không tạo business logic ở task này.
-[ ] Không xóa file hiện có nếu không cần thiết.
+[x] Tất cả folder mục tiêu tồn tại.
+[x] Các Python package có __init__.py.
+[x] Không tạo business logic ở task này.
+[x] Không xóa file hiện có nếu không cần thiết.
 ```
 
 ### User-run commands
@@ -287,11 +287,11 @@ backend/config/model_config.yaml
 ### Acceptance Criteria
 
 ```text
-[ ] Config đọc được từ YAML.
-[ ] Có default path cho raw/processed/output.
-[ ] Có default model names.
-[ ] Không hard-code path trong business logic.
-[ ] Có .env.example nhưng không commit secret.
+[x] Config đọc được từ YAML.
+[x] Có default path cho raw/processed/output.
+[x] Có default model names.
+[x] Không hard-code path trong business logic.
+[x] Có .env.example nhưng không commit secret.
 ```
 
 ### User-run commands

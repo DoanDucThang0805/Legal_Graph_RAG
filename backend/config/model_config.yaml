@@ -1,0 +1,14 @@
+models:
+  embedding_model: darklethelong/vnlegal-lal
+  generator_model: Qwen/Qwen2.5-7B-Instruct
+  reranker_model:
+
+embedding:
+  dimension: 1024
+  query_instruction_prefix: "Instruct: Given a Vietnamese legal question, retrieve relevant legal passages that answer the question\nQuery: "
+
+generation:
+  temperature: 0.0
+  do_sample: false
+  max_new_tokens: 700
+  timeout_seconds: 120
