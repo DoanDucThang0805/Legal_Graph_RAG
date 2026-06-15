@@ -19,10 +19,10 @@ rapidfuzz>=3.10,<4.0
 
 # ── Embeddings / Reranking / LLM local ───────────────────────────────────────
 sentence-transformers==3.3.1
-transformers==4.47.1
+transformers>=4.51,<5.0
 accelerate==1.2.1
 einops==0.8.0
-huggingface-hub==0.27.0
+huggingface-hub>=0.34,<1.0
 
 # Nếu chạy trong NVIDIA/DGX container đã có torch tối ưu sẵn,
 # có thể bỏ dòng torch này và dùng torch có sẵn trong image.
