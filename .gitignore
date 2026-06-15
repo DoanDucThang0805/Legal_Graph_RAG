@@ -2,3 +2,19 @@ backend/venv/
 backend/knowledge_data
 .env
 .venv 
+.pytest_cache
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest / type checker cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated data
+data/processed/
+data/raw/
+*.parquet
+*.csv

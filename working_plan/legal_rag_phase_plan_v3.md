@@ -973,6 +973,472 @@ print("duckdb ok")
 PY
 ```
 
+## P1.T11 — Prepare Indexable Corpus
+
+### Mục tiêu
+
+Tạo lớp dữ liệu trung gian phục vụ indexing cho Phase 2, nhằm tránh đưa trực tiếp `legal_articles.parquet` và `phapdien_articles.parquet` vào OpenSearch/Qdrant khi dữ liệu còn có outlier quá dài hoặc row rỗng.
+
+Task này **không thay đổi canonical corpus**. Các file canonical sau vẫn là source of truth:
+
+```text
+data/processed/legal_articles.parquet
+data/processed/phapdien_articles.parquet
+```
+
+Thay vào đó, task này tạo các file derived/indexable:
+
+```text
+data/processed/legal_article_chunks.parquet
+data/processed/phapdien_articles_index.parquet
+```
+
+Phase 2 sẽ index từ các file derived này.
+
+---
+
+### Bối cảnh sau Phase 1
+
+Phase 1 đã build xong với kết quả:
+
+```text
+test_questions: 2.000 rows, unique id 2.000
+phapdien_articles: 64.464 rows, có 406 rows empty content_text
+anle_units: 273.379 rows, unit_id unique, không empty text
+legal_documents: 146.555 rows, không thiếu law_id/markdown
+legal_articles: 1.015.680 rows, article_id unique bằng số dòng, không thiếu required fields
+phapdien_to_vbpl_map: 60.053 rows, không thiếu legal_article_id
+mapping coverage phapdien: 93.16%
+low-confidence/unmapped phapdien: 4.411 rows, đã có debug parquet
+```
+
+Risk cần xử lý trước Phase 2:
+
+```text
+1. legal_articles.article_text có outlier rất lớn, max khoảng 2.31M ký tự.
+2. phapdien có 406 rows rỗng content_text.
+3. 4.411 phapdien rows chưa map được, nhưng tạm thời defer vì không ảnh hưởng nguyên tắc citation.
+```
+
+---
+
+### Nguyên tắc bắt buộc
+
+```text
+[ ] Không sửa trực tiếp legal_articles.parquet.
+[ ] Không sửa trực tiếp phapdien_articles.parquet.
+[ ] legal_articles.parquet vẫn là source of truth cho relevant_docs/relevant_articles.
+[ ] Index corpus chỉ phục vụ retrieval.
+[ ] Khi retrieval hit vào chunk, output cuối cùng vẫn phải group về parent article_id.
+[ ] Không dùng chunk_id làm citation.
+[ ] Không xử lý 4.411 unmapped phapdien trong task này.
+```
+
+---
+
+### Deliverables
+
+Tạo module:
+
+```text
+backend/knowledge_processing/prepare_index_corpus.py
+```
+
+Tạo script:
+
+```text
+scripts/01_prepare_index_corpus.py
+```
+
+Tạo output files:
+
+```text
+data/processed/legal_article_chunks.parquet
+data/processed/phapdien_articles_index.parquet
+data/processed/debug/legal_article_text_length_report.csv
+data/processed/debug/legal_article_chunk_report.csv
+data/processed/debug/phapdien_empty_content_report.csv
+```
+
+Tạo test nếu phù hợp:
+
+```text
+tests/test_prepare_index_corpus.py
+```
+
+---
+
+### Output 1 — legal_article_chunks.parquet
+
+Input:
+
+```text
+data/processed/legal_articles.parquet
+```
+
+Output:
+
+```text
+data/processed/legal_article_chunks.parquet
+```
+
+Schema đề xuất:
+
+```text
+chunk_id
+article_id
+law_id
+law_title
+article_no
+article_title
+chunk_index
+chunk_text
+chunk_char_len
+source_url
+domain
+status
+```
+
+`chunk_id` format:
+
+```text
+{article_id}::chunk_{chunk_index:04d}
+```
+
+Chunking rules:
+
+```text
+[ ] Nếu article_text ngắn, tạo 1 chunk.
+[ ] Nếu article_text quá dài, split thành nhiều chunks.
+[ ] Không tạo chunk_text rỗng.
+[ ] Không làm mất parent article_id.
+[ ] chunk_text dùng cho BM25/vector index.
+[ ] article_id dùng để group retrieval result về Điều luật canonical.
+```
+
+Config mặc định:
+
+```yaml
+max_chunk_chars: 3000
+chunk_overlap_chars: 300
+max_article_chars_for_single_doc: 12000
+min_text_chars: 20
+```
+
+Gợi ý xử lý:
+
+```text
+- Ưu tiên split theo ranh giới đoạn/khoản/dòng nếu làm được.
+- Nếu không tìm được ranh giới phù hợp, fallback split theo character window.
+- Overlap không được tạo infinite loop.
+- Article quá ngắn hoặc text lỗi cần được log, không làm crash pipeline.
+```
+
+---
+
+### Output 2 — phapdien_articles_index.parquet
+
+Input:
+
+```text
+data/processed/phapdien_articles.parquet
+```
+
+Output:
+
+```text
+data/processed/phapdien_articles_index.parquet
+```
+
+Yêu cầu:
+
+```text
+[ ] Loại khỏi index input các row có content_text null hoặc rỗng sau strip.
+[ ] Không xóa row khỏi phapdien_articles.parquet gốc.
+[ ] Giữ các field cần cho retrieval.
+```
+
+Fields cần giữ:
+
+```text
+phapdien_id
+topic_title
+subject_title
+chapter_title
+article_title
+content_text
+source_note_text
+related_note_text
+source_url
+source_links_json
+```
+
+Các row rỗng được ghi vào:
+
+```text
+data/processed/debug/phapdien_empty_content_report.csv
+```
+
+---
+
+### Output 3 — legal_article_text_length_report.csv
+
+Tạo report:
+
+```text
+data/processed/debug/legal_article_text_length_report.csv
+```
+
+Fields tối thiểu:
+
+```text
+article_id
+law_id
+law_title
+article_no
+article_title
+article_text_char_len
+source_url
+status
+domain
+```
+
+Yêu cầu:
+
+```text
+[ ] Sort giảm dần theo article_text_char_len.
+[ ] Dùng để audit các Điều luật outlier quá dài.
+```
+
+---
+
+### Output 4 — legal_article_chunk_report.csv
+
+Tạo report:
+
+```text
+data/processed/debug/legal_article_chunk_report.csv
+```
+
+Report cần có:
+
+```text
+total_articles
+total_chunks
+max_article_text_len
+max_chunk_len
+avg_chunks_per_article
+articles_with_multiple_chunks
+articles_skipped_if_any
+max_chunk_chars
+chunk_overlap_chars
+max_article_chars_for_single_doc
+min_text_chars
+```
+
+Có thể lưu dạng CSV một dòng để dễ đọc bằng Polars/Pandas.
+
+---
+
+### Required function
+
+Trong `prepare_index_corpus.py`, tạo function chính:
+
+```python
+def prepare_indexable_corpus(
+    legal_articles_path: str = "data/processed/legal_articles.parquet",
+    phapdien_articles_path: str = "data/processed/phapdien_articles.parquet",
+    output_legal_chunks_path: str = "data/processed/legal_article_chunks.parquet",
+    output_phapdien_index_path: str = "data/processed/phapdien_articles_index.parquet",
+    debug_dir: str = "data/processed/debug",
+    max_chunk_chars: int = 3000,
+    chunk_overlap_chars: int = 300,
+    max_article_chars_for_single_doc: int = 12000,
+    min_text_chars: int = 20,
+) -> dict:
+    ...
+```
+
+Return summary dict gồm:
+
+```text
+legal_articles_count
+legal_chunks_count
+phapdien_rows_count
+phapdien_index_rows_count
+phapdien_empty_rows_count
+max_article_text_len
+reports_created
+```
+
+---
+
+### Script entrypoint
+
+Tạo:
+
+```text
+scripts/01_prepare_index_corpus.py
+```
+
+Script cần hỗ trợ argparse:
+
+```text
+--max-chunk-chars
+--chunk-overlap-chars
+--min-text-chars
+--max-article-chars-for-single-doc
+```
+
+Yêu cầu:
+
+```text
+[ ] Script chỉ gọi backend function.
+[ ] Không chứa business logic lớn.
+[ ] Có logging rõ từng bước.
+[ ] In summary cuối cùng.
+```
+
+---
+
+### Tests
+
+Tạo:
+
+```text
+tests/test_prepare_index_corpus.py
+```
+
+Test tối thiểu:
+
+```text
+[ ] Short article tạo 1 chunk.
+[ ] Long article tạo nhiều chunks.
+[ ] chunk_id giữ parent article_id.
+[ ] Overlap không tạo infinite loop.
+[ ] Không có chunk_text rỗng.
+[ ] phapdien empty content bị filter khỏi index output.
+[ ] legal_articles canonical không bị modify.
+```
+
+---
+
+### Acceptance Criteria
+
+```text
+[ ] legal_articles.parquet không bị sửa.
+[ ] phapdien_articles.parquet không bị sửa.
+[ ] Tạo được legal_article_chunks.parquet.
+[ ] Tạo được phapdien_articles_index.parquet.
+[ ] Tạo được legal_article_text_length_report.csv.
+[ ] Tạo được legal_article_chunk_report.csv.
+[ ] Tạo được phapdien_empty_content_report.csv.
+[ ] legal_article_chunks.parquet có chunk_id unique.
+[ ] Mỗi chunk có parent article_id.
+[ ] Không có chunk_text rỗng.
+[ ] phapdien_articles_index.parquet không có content_text rỗng.
+[ ] Code có type hints.
+[ ] Logic chunking có comment tiếng Việt.
+[ ] Không xử lý 4.411 unmapped phapdien trong task này.
+```
+
+---
+
+### User-run commands
+
+Chạy test:
+
+```bash
+pytest tests/test_prepare_index_corpus.py -q
+```
+
+Chạy prepare index corpus:
+
+```bash
+python scripts/01_prepare_index_corpus.py
+```
+
+Kiểm tra output:
+
+```bash
+python - <<'PY'
+import polars as pl
+from pathlib import Path
+
+files = [
+    "data/processed/legal_article_chunks.parquet",
+    "data/processed/phapdien_articles_index.parquet",
+    "data/processed/debug/legal_article_text_length_report.csv",
+    "data/processed/debug/legal_article_chunk_report.csv",
+    "data/processed/debug/phapdien_empty_content_report.csv",
+]
+
+for f in files:
+    p = Path(f)
+    print(f, "exists=", p.exists())
+    if p.exists():
+        if f.endswith(".parquet"):
+            df = pl.read_parquet(p)
+        else:
+            df = pl.read_csv(p)
+        print("  shape:", df.shape)
+        print(df.head(3))
+
+chunks = pl.read_parquet("data/processed/legal_article_chunks.parquet")
+print("chunk_id unique:", chunks["chunk_id"].n_unique(), "/", chunks.height)
+print(
+    "empty chunk_text:",
+    chunks.filter(
+        pl.col("chunk_text").is_null()
+        | (pl.col("chunk_text").str.strip_chars() == "")
+    ).height,
+)
+
+phapdien_idx = pl.read_parquet("data/processed/phapdien_articles_index.parquet")
+print(
+    "empty phapdien content_text:",
+    phapdien_idx.filter(
+        pl.col("content_text").is_null()
+        | (pl.col("content_text").str.strip_chars() == "")
+    ).height,
+)
+PY
+```
+
+---
+
+### Expected result
+
+```text
+legal_article_chunks.parquet tồn tại
+phapdien_articles_index.parquet tồn tại
+debug reports tồn tại
+chunk_id unique = số dòng chunks
+empty chunk_text = 0
+empty phapdien content_text = 0
+```
+
+---
+
+### Phase 2 dependency update
+
+Sau task này, Phase 2 không index trực tiếp full text từ:
+
+```text
+data/processed/legal_articles.parquet
+data/processed/phapdien_articles.parquet
+```
+
+Thay vào đó, Phase 2 index từ:
+
+```text
+data/processed/legal_article_chunks.parquet
+data/processed/phapdien_articles_index.parquet
+data/processed/anle_units.parquet
+```
+
+Khi retrieval hit vào `legal_article_chunks`, hệ thống phải group kết quả về parent `article_id` trước khi article selection và submission builder xử lý.
+
 ---
 
 ## P2.T2 — vnlegal-lal embedding wrapper
@@ -2168,3 +2634,4 @@ Một task chỉ được coi là xong khi:
 [ ] Không tự chạy lệnh thay người dùng.
 [ ] Nếu có test, pytest tương ứng pass khi người dùng chạy.
 ```
+
