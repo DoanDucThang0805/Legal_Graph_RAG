@@ -16,19 +16,21 @@ from backend.infrastructure.vector_store.qdrant_client import QdrantClient
 
 logger = logging.getLogger(__name__)
 
-LEGAL_ARTICLES_COLLECTION = "legal_articles_dense"
+LEGAL_ARTICLE_CHUNKS_COLLECTION = "legal_article_chunks_dense"
 PHAPDIEN_ARTICLES_COLLECTION = "phapdien_articles_dense"
 ANLE_UNITS_COLLECTION = "anle_units_dense"
 
 UPSERT_BATCH_SIZE = 128
 
-LEGAL_ARTICLE_COLUMNS = [
+LEGAL_ARTICLE_CHUNK_COLUMNS = [
+    "chunk_id",
     "article_id",
     "law_id",
     "law_title",
     "article_no",
     "article_title",
-    "article_text",
+    "chunk_index",
+    "chunk_text",
     "source_url",
     "domain",
     "status",
@@ -72,8 +74,8 @@ def build_all_vector_indexes(
     vector_client = client or QdrantClient()
     embedding_model = embedder or VNLegalLALEmbedder()
 
-    build_legal_articles_vector_index(
-        source_dir / "legal_articles.parquet",
+    build_legal_article_chunks_vector_index(
+        source_dir / "legal_article_chunks.parquet",
         recreate=recreate,
         skip_existing=skip_existing,
         max_rows=max_rows,
@@ -82,7 +84,7 @@ def build_all_vector_indexes(
         embedder=embedding_model,
     )
     build_phapdien_articles_vector_index(
-        source_dir / "phapdien_articles.parquet",
+        source_dir / "phapdien_articles_index.parquet",
         recreate=recreate,
         skip_existing=skip_existing,
         max_rows=max_rows,
@@ -101,6 +103,32 @@ def build_all_vector_indexes(
     )
 
 
+def build_legal_article_chunks_vector_index(
+    input_path: str | Path,
+    *,
+    recreate: bool = False,
+    skip_existing: bool = False,
+    max_rows: int | None = None,
+    resume: bool = False,
+    client: QdrantClient | None = None,
+    embedder: VNLegalLALEmbedder | None = None,
+) -> None:
+    """Build vector collection for legal article chunks."""
+
+    df = _limit_dataframe(_read_required_parquet(input_path, LEGAL_ARTICLE_CHUNK_COLUMNS), max_rows)
+    _build_collection_from_dataframe(
+        df,
+        collection_name=LEGAL_ARTICLE_CHUNKS_COLLECTION,
+        id_column="chunk_id",
+        text_builder=_build_legal_chunk_text,
+        recreate=recreate,
+        skip_existing=skip_existing,
+        resume=resume,
+        client=client or QdrantClient(),
+        embedder=embedder or VNLegalLALEmbedder(),
+    )
+
+
 def build_legal_articles_vector_index(
     input_path: str | Path,
     *,
@@ -111,19 +139,16 @@ def build_legal_articles_vector_index(
     client: QdrantClient | None = None,
     embedder: VNLegalLALEmbedder | None = None,
 ) -> None:
-    """Build vector collection for canonical legal articles."""
+    """Backward-compatible wrapper for chunk-level legal vector indexing."""
 
-    df = _limit_dataframe(_read_required_parquet(input_path, LEGAL_ARTICLE_COLUMNS), max_rows)
-    _build_collection_from_dataframe(
-        df,
-        collection_name=LEGAL_ARTICLES_COLLECTION,
-        id_column="article_id",
-        text_builder=_build_legal_article_text,
+    build_legal_article_chunks_vector_index(
+        input_path,
         recreate=recreate,
         skip_existing=skip_existing,
+        max_rows=max_rows,
         resume=resume,
-        client=client or QdrantClient(),
-        embedder=embedder or VNLegalLALEmbedder(),
+        client=client,
+        embedder=embedder,
     )
 
 
@@ -366,14 +391,14 @@ def _clean_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {key: "" if value is None else value for key, value in row.items()}
 
 
-def _build_legal_article_text(row: dict[str, Any]) -> str:
+def _build_legal_chunk_text(row: dict[str, Any]) -> str:
     return "\n".join(
         [
             f"Tên văn bản: {_optional_text(row.get('law_title'))}",
             f"Điều: {_optional_text(row.get('article_no'))}",
             f"Tiêu đề điều: {_optional_text(row.get('article_title'))}",
-            "Nội dung:",
-            _required_text(row.get("article_text"), "article_text"),
+            "Nội dung chunk:",
+            _required_text(row.get("chunk_text"), "chunk_text"),
         ]
     )
 

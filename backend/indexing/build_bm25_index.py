@@ -15,19 +15,21 @@ from backend.infrastructure.search_engine.opensearch_client import OpenSearchCli
 
 logger = logging.getLogger(__name__)
 
-LEGAL_ARTICLES_INDEX = "legal_articles_bm25"
+LEGAL_ARTICLE_CHUNKS_INDEX = "legal_article_chunks_bm25"
 PHAPDIEN_ARTICLES_INDEX = "phapdien_articles_bm25"
 ANLE_UNITS_INDEX = "anle_units_bm25"
 
 BULK_BATCH_SIZE = 500
 
-LEGAL_ARTICLE_COLUMNS = [
+LEGAL_ARTICLE_CHUNK_COLUMNS = [
+    "chunk_id",
     "article_id",
     "law_id",
     "law_title",
     "article_no",
     "article_title",
-    "article_text",
+    "chunk_index",
+    "chunk_text",
     "source_url",
     "domain",
     "status",
@@ -66,13 +68,13 @@ def build_all_bm25_indexes(
     source_dir = Path(processed_dir) if processed_dir is not None else settings.paths.processed_dir
     search_client = client or OpenSearchClient()
 
-    build_legal_articles_bm25_index(
-        source_dir / "legal_articles.parquet",
+    build_legal_article_chunks_bm25_index(
+        source_dir / "legal_article_chunks.parquet",
         recreate=recreate,
         client=search_client,
     )
     build_phapdien_articles_bm25_index(
-        source_dir / "phapdien_articles.parquet",
+        source_dir / "phapdien_articles_index.parquet",
         recreate=recreate,
         client=search_client,
     )
@@ -83,20 +85,20 @@ def build_all_bm25_indexes(
     )
 
 
-def build_legal_articles_bm25_index(
+def build_legal_article_chunks_bm25_index(
     input_path: str | Path,
     *,
     recreate: bool = False,
     client: OpenSearchClient | None = None,
 ) -> None:
-    """Build BM25 index for canonical legal articles."""
+    """Build BM25 index for legal article chunks."""
 
-    df = _read_required_parquet(input_path, LEGAL_ARTICLE_COLUMNS)
+    df = _read_required_parquet(input_path, LEGAL_ARTICLE_CHUNK_COLUMNS)
     _build_index_from_dataframe(
         df,
-        index_name=LEGAL_ARTICLES_INDEX,
-        mapping=_legal_articles_mapping(),
-        id_column="article_id",
+        index_name=LEGAL_ARTICLE_CHUNKS_INDEX,
+        mapping=_legal_article_chunks_mapping(),
+        id_column="chunk_id",
         recreate=recreate,
         client=client or OpenSearchClient(),
     )
@@ -265,16 +267,18 @@ def _text_field() -> dict[str, str]:
     return {"type": "text"}
 
 
-def _legal_articles_mapping() -> dict[str, Any]:
+def _legal_article_chunks_mapping() -> dict[str, Any]:
     mapping = _base_index_settings()
     mapping["mappings"] = {
         "properties": {
+            "chunk_id": _keyword_field(),
             "article_id": _keyword_field(),
             "law_id": _keyword_field(),
             "law_title": _text_with_keyword(),
             "article_no": _keyword_field(),
             "article_title": _text_field(),
-            "article_text": _text_field(),
+            "chunk_index": {"type": "integer"},
+            "chunk_text": _text_field(),
             "source_url": _keyword_field(),
             "domain": _keyword_field(),
             "status": _keyword_field(),
