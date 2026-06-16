@@ -60,6 +60,7 @@ def build_all_vector_indexes(
     recreate: bool = False,
     skip_existing: bool = False,
     max_rows: int | None = None,
+    resume: bool = False,
     client: QdrantClient | None = None,
     embedder: VNLegalLALEmbedder | None = None,
     processed_dir: str | Path | None = None,
@@ -76,6 +77,7 @@ def build_all_vector_indexes(
         recreate=recreate,
         skip_existing=skip_existing,
         max_rows=max_rows,
+        resume=resume,
         client=vector_client,
         embedder=embedding_model,
     )
@@ -84,6 +86,7 @@ def build_all_vector_indexes(
         recreate=recreate,
         skip_existing=skip_existing,
         max_rows=max_rows,
+        resume=resume,
         client=vector_client,
         embedder=embedding_model,
     )
@@ -92,6 +95,7 @@ def build_all_vector_indexes(
         recreate=recreate,
         skip_existing=skip_existing,
         max_rows=max_rows,
+        resume=resume,
         client=vector_client,
         embedder=embedding_model,
     )
@@ -103,6 +107,7 @@ def build_legal_articles_vector_index(
     recreate: bool = False,
     skip_existing: bool = False,
     max_rows: int | None = None,
+    resume: bool = False,
     client: QdrantClient | None = None,
     embedder: VNLegalLALEmbedder | None = None,
 ) -> None:
@@ -116,6 +121,7 @@ def build_legal_articles_vector_index(
         text_builder=_build_legal_article_text,
         recreate=recreate,
         skip_existing=skip_existing,
+        resume=resume,
         client=client or QdrantClient(),
         embedder=embedder or VNLegalLALEmbedder(),
     )
@@ -127,6 +133,7 @@ def build_phapdien_articles_vector_index(
     recreate: bool = False,
     skip_existing: bool = False,
     max_rows: int | None = None,
+    resume: bool = False,
     client: QdrantClient | None = None,
     embedder: VNLegalLALEmbedder | None = None,
 ) -> None:
@@ -140,6 +147,7 @@ def build_phapdien_articles_vector_index(
         text_builder=_build_phapdien_text,
         recreate=recreate,
         skip_existing=skip_existing,
+        resume=resume,
         client=client or QdrantClient(),
         embedder=embedder or VNLegalLALEmbedder(),
     )
@@ -151,6 +159,7 @@ def build_anle_units_vector_index(
     recreate: bool = False,
     skip_existing: bool = False,
     max_rows: int | None = None,
+    resume: bool = False,
     client: QdrantClient | None = None,
     embedder: VNLegalLALEmbedder | None = None,
 ) -> None:
@@ -164,6 +173,7 @@ def build_anle_units_vector_index(
         text_builder=_build_anle_text,
         recreate=recreate,
         skip_existing=skip_existing,
+        resume=resume,
         client=client or QdrantClient(),
         embedder=embedder or VNLegalLALEmbedder(),
     )
@@ -177,6 +187,7 @@ def _build_collection_from_dataframe(
     text_builder: Callable[[dict[str, Any]], str],
     recreate: bool,
     skip_existing: bool,
+    resume: bool,
     client: QdrantClient,
     embedder: VNLegalLALEmbedder,
 ) -> None:
@@ -203,6 +214,7 @@ def _build_collection_from_dataframe(
         id_column=id_column,
         text_builder=text_builder,
         embedder=embedder,
+        resume=resume,
     )
     logger.info("Vector collection built: collection=%s rows=%s", collection_name, indexed_count)
 
@@ -215,6 +227,7 @@ def _upsert_dataframe(
     id_column: str,
     text_builder: Callable[[dict[str, Any]], str],
     embedder: VNLegalLALEmbedder,
+    resume: bool,
 ) -> int:
     try:
         from qdrant_client.models import PointStruct
@@ -223,6 +236,8 @@ def _upsert_dataframe(
         raise RuntimeError("Missing dependency: qdrant-client or tqdm") from exc
 
     total_indexed = 0
+    total_skipped = 0
+    total_scanned = 0
     total_batches = (df.height + UPSERT_BATCH_SIZE - 1) // UPSERT_BATCH_SIZE
     progress = tqdm(
         _iter_row_batches(df, UPSERT_BATCH_SIZE),
@@ -231,22 +246,64 @@ def _upsert_dataframe(
         unit="batch",
     )
     for rows in progress:
-        texts = [text_builder(row) for row in rows]
+        total_scanned += len(rows)
+        row_id_pairs = [(row, _build_point_id(row[id_column])) for row in rows]
+        if resume:
+            row_id_pairs, skipped_count = _filter_missing_points(
+                sdk_client,
+                collection_name=collection_name,
+                row_id_pairs=row_id_pairs,
+            )
+            total_skipped += skipped_count
+
+        if not row_id_pairs:
+            progress.set_postfix(scanned=total_scanned, indexed=total_indexed, skipped=total_skipped)
+            continue
+
+        texts = [text_builder(row) for row, _ in row_id_pairs]
         vectors = embedder.encode_documents(texts)
         points = [
             PointStruct(
-                id=_build_point_id(row[id_column]),
+                id=point_id,
                 vector=vector,
                 payload=_clean_payload(row),
             )
-            for row, vector in zip(rows, vectors, strict=True)
+            for (row, point_id), vector in zip(row_id_pairs, vectors, strict=True)
         ]
         sdk_client.upsert(collection_name=collection_name, points=points, wait=True)
         total_indexed += len(points)
-        progress.set_postfix(indexed=total_indexed)
-        logger.info("Upserted vector batch: collection=%s total=%s", collection_name, total_indexed)
+        progress.set_postfix(scanned=total_scanned, indexed=total_indexed, skipped=total_skipped)
+        logger.info(
+            "Upserted vector batch: collection=%s scanned=%s indexed=%s skipped=%s",
+            collection_name,
+            total_scanned,
+            total_indexed,
+            total_skipped,
+        )
 
     return total_indexed
+
+
+def _filter_missing_points(
+    sdk_client: Any,
+    *,
+    collection_name: str,
+    row_id_pairs: list[tuple[dict[str, Any], str]],
+) -> tuple[list[tuple[dict[str, Any], str]], int]:
+    point_ids = [point_id for _, point_id in row_id_pairs]
+    existing_points = sdk_client.retrieve(
+        collection_name=collection_name,
+        ids=point_ids,
+        with_payload=False,
+        with_vectors=False,
+    )
+    existing_ids = {str(point.id) for point in existing_points}
+    missing_pairs = [
+        (row, point_id)
+        for row, point_id in row_id_pairs
+        if point_id not in existing_ids
+    ]
+    return missing_pairs, len(row_id_pairs) - len(missing_pairs)
 
 
 def _create_collection(sdk_client: Any, collection_name: str, vector_size: int) -> None:
