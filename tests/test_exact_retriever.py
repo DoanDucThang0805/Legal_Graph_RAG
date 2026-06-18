@@ -79,9 +79,21 @@ def test_law_id_only_fallback_is_skipped_when_strong_law_article_match_exists() 
 
     hits = retriever.search("Theo Điều 4 Luật 04/2017/QH14 thì sao?", top_k=5)
 
+    assert len(hits) == 1
     assert hits[0].match_type == "law_id_article_no"
     assert "article-law-other" not in {hit.article_id for hit in hits}
     assert all(hit.match_type != "law_id_only" for hit in hits)
+    assert all(hit.match_type != "article_no_only" for hit in hits)
+
+
+def test_article_no_only_is_used_when_query_has_article_no_without_law_id() -> None:
+    retriever = ExactRetriever(backend=FakeExactBackend())
+
+    hits = retriever.search("Theo Điều 4 thì quy định thế nào?", top_k=5)
+
+    assert hits
+    assert {hit.match_type for hit in hits} == {"article_no_only"}
+    assert all(hit.score == 0.5 for hit in hits)
 
 
 def test_accounting_account_detection() -> None:

@@ -129,11 +129,10 @@ class ExactRetriever:
                     },
                 )
 
+        if law_ids_with_strong_article_match:
+            return sorted(candidates.values(), key=lambda hit: hit.score, reverse=True)[:top_k]
+
         for law_id in signals.law_ids:
-            if law_id in law_ids_with_strong_article_match:
-                # Khi đã có exact match theo cả mã văn bản + điều, không mở rộng ra
-                # toàn bộ văn bản vì sẽ làm giảm precision của truy vấn rất rõ ràng.
-                continue
             self._add_candidates(
                 candidates,
                 self.backend.find_by_law_id(law_id, limit=lookup_limit),
