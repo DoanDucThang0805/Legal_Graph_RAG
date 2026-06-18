@@ -1778,6 +1778,9 @@ status
 
 Vấn đề chính: `exact_index.json` quá lớn vì các inverted indexes lưu lặp lại `article_id` dài nhiều lần. Nếu Phase 4 runtime dùng `json.load()` file 1.9GB thì tốn RAM, startup chậm và không phù hợp để chạy retrieval nhiều lần.
 
+- Nếu project đã chọn DuckDB làm runtime exact index, cập nhật deliverable thành data/processed/exact_index.duckdb.
+- Không giữ mô tả bắt buộc exact_index/ folder Parquet nếu không còn triển khai hướng đó.
+
 ### Mục tiêu task
 
 Tối ưu P2.T5 để tạo thêm exact index runtime-friendly dạng thư mục nhiều file Parquet/JSON metadata, thay vì phụ thuộc vào một file JSON lớn.
@@ -2501,6 +2504,12 @@ PY
 
 Dùng prompt: `P4.T3`.
 
+### Note
+
+- Runtime chính dùng exact_index.duckdb.
+- exact_index.json chỉ legacy/debug nếu còn.
+- Strong law_id_article_no match không append fallback article_no_only/law_id_only.
+
 ### Deliverables
 
 ```text
@@ -2521,7 +2530,7 @@ backend/retrieval/exact_retriever.py
 ```bash
 python - <<'PY'
 from backend.retrieval.exact_retriever import ExactRetriever
-r = ExactRetriever("data/processed/exact_index.json")
+r = ExactRetriever("data/processed/exact_index.duckdb")
 print(r.search("Theo Điều 4 Luật Hỗ trợ DNNVV thì sao?", top_k=5))
 PY
 ```
