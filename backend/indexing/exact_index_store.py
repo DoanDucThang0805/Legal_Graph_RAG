@@ -231,17 +231,17 @@ def _load_articles(conn: duckdb.DuckDBPyConnection, source_path: Path) -> None:
         """
         INSERT INTO exact_articles
         SELECT
-            CAST(article_id AS VARCHAR) AS article_id,
-            COALESCE(CAST(law_id AS VARCHAR), '') AS law_id,
-            COALESCE(CAST(law_title AS VARCHAR), '') AS law_title,
-            COALESCE(CAST(article_no AS VARCHAR), '') AS article_no,
-            COALESCE(CAST(article_title AS VARCHAR), '') AS article_title,
-            COALESCE(CAST(content AS VARCHAR), '') AS content,
-            COALESCE(CAST(source_url AS VARCHAR), '') AS source_url,
-            COALESCE(CAST(domain AS VARCHAR), '') AS domain,
-            COALESCE(CAST(status AS VARCHAR), '') AS status
-        FROM read_parquet(?)
-        WHERE article_id IS NOT NULL AND CAST(article_id AS VARCHAR) != ''
+            CAST(src.article_id AS VARCHAR) AS article_id,
+            COALESCE(CAST(src.law_id AS VARCHAR), '') AS law_id,
+            COALESCE(CAST(src.law_title AS VARCHAR), '') AS law_title,
+            COALESCE(CAST(src.article_no AS VARCHAR), '') AS article_no,
+            COALESCE(CAST(src.article_title AS VARCHAR), '') AS article_title,
+            COALESCE(CAST(src.content AS VARCHAR), '') AS content,
+            COALESCE(CAST(src.source_url AS VARCHAR), '') AS source_url,
+            COALESCE(CAST(src.domain AS VARCHAR), '') AS domain,
+            COALESCE(CAST(src.status AS VARCHAR), '') AS status
+        FROM read_parquet(?) AS src
+        WHERE src.article_id IS NOT NULL AND CAST(src.article_id AS VARCHAR) != ''
         """,
         [str(source_path)],
     )
@@ -273,7 +273,7 @@ def _load_direct_lookup_tables(conn: duckdb.DuckDBPyConnection) -> None:
 def _load_feature_lookup_tables(conn: duckdb.DuckDBPyConnection, *, batch_size: int = 10_000) -> None:
     # Feature extraction dùng regex Python hiện có để giữ behavior nhất quán
     # với JSON exact index, nhưng chỉ lưu inverted index nhỏ vào DuckDB.
-    batches = conn.execute("SELECT article_id, content FROM exact_articles").fetch_record_batch(batch_size)
+    batches = conn.execute("SELECT article_id, content FROM exact_articles").to_arrow_reader(batch_size=batch_size)
     for batch in batches:
         article_ids = batch.column("article_id").to_pylist()
         contents = batch.column("content").to_pylist()
