@@ -5,15 +5,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.retrieval.article_selector import ArticleSelector
-from backend.retrieval.bm25_retriever import BM25Retriever
-from backend.retrieval.dense_retriever import DenseRetriever
-from backend.retrieval.exact_retriever import ExactRetriever
 from backend.retrieval.fusion import reciprocal_rank_fusion
-from backend.retrieval.phapdien_retriever import PhapdienMappedRetriever
 from backend.schema.retrieval_result import RetrievalCandidate
+
+if TYPE_CHECKING:
+    from backend.retrieval.bm25_retriever import BM25Retriever
+    from backend.retrieval.dense_retriever import DenseRetriever
+    from backend.retrieval.exact_retriever import ExactRetriever
+    from backend.retrieval.phapdien_retriever import PhapdienMappedRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -178,21 +180,29 @@ class HybridLegalRetriever:
 
     def _get_bm25_retriever(self) -> BM25Retriever | Any:
         if self._bm25_retriever is None:
+            from backend.retrieval.bm25_retriever import BM25Retriever
+
             self._bm25_retriever = BM25Retriever()
         return self._bm25_retriever
 
     def _get_dense_retriever(self) -> DenseRetriever | Any:
         if self._dense_retriever is None:
+            from backend.retrieval.dense_retriever import DenseRetriever
+
             self._dense_retriever = DenseRetriever()
         return self._dense_retriever
 
     def _get_exact_retriever(self) -> ExactRetriever | Any:
         if self._exact_retriever is None:
+            from backend.retrieval.exact_retriever import ExactRetriever
+
             self._exact_retriever = ExactRetriever()
         return self._exact_retriever
 
     def _get_phapdien_retriever(self) -> PhapdienMappedRetriever | Any:
         if self._phapdien_retriever is None:
+            from backend.retrieval.phapdien_retriever import PhapdienMappedRetriever
+
             self._phapdien_retriever = PhapdienMappedRetriever()
         return self._phapdien_retriever
 
