@@ -227,21 +227,27 @@ def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _load_articles(conn: duckdb.DuckDBPyConnection, source_path: Path) -> None:
+    columns = _get_parquet_columns(conn, source_path)
+    article_id_expr = _required_column_expr(columns, "article_id")
+    content_expr = _first_existing_column_expr(
+        columns,
+        ("content", "article_text", "article_content", "text", "full_text", "normalized_text", "clean_text"),
+    )
     conn.execute(
-        """
+        f"""
         INSERT INTO exact_articles
         SELECT
-            CAST(src.article_id AS VARCHAR) AS article_id,
-            COALESCE(CAST(src.law_id AS VARCHAR), '') AS law_id,
-            COALESCE(CAST(src.law_title AS VARCHAR), '') AS law_title,
-            COALESCE(CAST(src.article_no AS VARCHAR), '') AS article_no,
-            COALESCE(CAST(src.article_title AS VARCHAR), '') AS article_title,
-            COALESCE(CAST(src.content AS VARCHAR), '') AS content,
-            COALESCE(CAST(src.source_url AS VARCHAR), '') AS source_url,
-            COALESCE(CAST(src.domain AS VARCHAR), '') AS domain,
-            COALESCE(CAST(src.status AS VARCHAR), '') AS status
+            CAST({article_id_expr} AS VARCHAR) AS article_id,
+            {_optional_column_expr(columns, "law_id")} AS law_id,
+            {_optional_column_expr(columns, "law_title")} AS law_title,
+            {_optional_column_expr(columns, "article_no")} AS article_no,
+            {_optional_column_expr(columns, "article_title")} AS article_title,
+            {content_expr} AS content,
+            {_optional_column_expr(columns, "source_url")} AS source_url,
+            {_optional_column_expr(columns, "domain")} AS domain,
+            {_optional_column_expr(columns, "status")} AS status
         FROM read_parquet(?) AS src
-        WHERE src.article_id IS NOT NULL AND CAST(src.article_id AS VARCHAR) != ''
+        WHERE {article_id_expr} IS NOT NULL AND CAST({article_id_expr} AS VARCHAR) != ''
         """,
         [str(source_path)],
     )
@@ -293,6 +299,39 @@ def _load_feature_lookup_tables(conn: duckdb.DuckDBPyConnection, *, batch_size: 
             conn.executemany("INSERT INTO exact_deadline_numbers VALUES (?, ?)", deadline_rows)
         if sanction_rows:
             conn.executemany("INSERT INTO exact_sanction_terms VALUES (?, ?)", sanction_rows)
+
+
+def _get_parquet_columns(conn: duckdb.DuckDBPyConnection, source_path: Path) -> set[str]:
+    rows = conn.execute("DESCRIBE SELECT * FROM read_parquet(?)", [str(source_path)]).fetchall()
+    return {row[0] for row in rows}
+
+
+def _required_column_expr(columns: set[str], column_name: str) -> str:
+    if column_name not in columns:
+        raise ValueError(f"Exact index source is missing required column: {column_name}")
+    return f"src.{_quote_identifier(column_name)}"
+
+
+def _optional_column_expr(columns: set[str], column_name: str) -> str:
+    if column_name not in columns:
+        logger.warning("Exact index source is missing optional column: %s", column_name)
+        return "''"
+    return f"COALESCE(CAST(src.{_quote_identifier(column_name)} AS VARCHAR), '')"
+
+
+def _first_existing_column_expr(columns: set[str], candidates: tuple[str, ...]) -> str:
+    for column_name in candidates:
+        if column_name in columns:
+            logger.info("Using %s as exact index content column", column_name)
+            return f"COALESCE(CAST(src.{_quote_identifier(column_name)} AS VARCHAR), '')"
+    raise ValueError(
+        "Exact index source is missing a content column. "
+        f"Tried: {', '.join(candidates)}"
+    )
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _write_metadata(conn: duckdb.DuckDBPyConnection, source_path: Path, article_count: int) -> None:
