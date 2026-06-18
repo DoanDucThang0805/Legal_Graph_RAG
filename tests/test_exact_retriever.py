@@ -74,6 +74,16 @@ def test_law_id_and_article_no_return_strongest_match_type() -> None:
     assert hits[0].metadata["article_no"] == "Điều 4"
 
 
+def test_law_id_only_fallback_is_skipped_when_strong_law_article_match_exists() -> None:
+    retriever = ExactRetriever(backend=FakeExactBackend())
+
+    hits = retriever.search("Theo Điều 4 Luật 04/2017/QH14 thì sao?", top_k=5)
+
+    assert hits[0].match_type == "law_id_article_no"
+    assert "article-law-other" not in {hit.article_id for hit in hits}
+    assert all(hit.match_type != "law_id_only" for hit in hits)
+
+
 def test_accounting_account_detection() -> None:
     retriever = ExactRetriever(backend=FakeExactBackend())
 

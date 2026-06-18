@@ -109,12 +109,16 @@ class ExactRetriever:
         signals = detect_exact_query_signals(normalized_question)
         candidates: dict[str, ExactHit] = {}
         lookup_limit = max(top_k * 5, top_k)
+        law_ids_with_strong_article_match: set[str] = set()
 
         for law_id in signals.law_ids:
             for article_no in signals.article_nos:
+                article_ids = self.backend.find_by_law_article(law_id, article_no, limit=lookup_limit)
+                if article_ids:
+                    law_ids_with_strong_article_match.add(law_id)
                 self._add_candidates(
                     candidates,
-                    self.backend.find_by_law_article(law_id, article_no, limit=lookup_limit),
+                    article_ids,
                     score=LAW_ARTICLE_SCORE,
                     match_type="law_id_article_no",
                     metadata={
@@ -126,6 +130,10 @@ class ExactRetriever:
                 )
 
         for law_id in signals.law_ids:
+            if law_id in law_ids_with_strong_article_match:
+                # Khi đã có exact match theo cả mã văn bản + điều, không mở rộng ra
+                # toàn bộ văn bản vì sẽ làm giảm precision của truy vấn rất rõ ràng.
+                continue
             self._add_candidates(
                 candidates,
                 self.backend.find_by_law_id(law_id, limit=lookup_limit),
