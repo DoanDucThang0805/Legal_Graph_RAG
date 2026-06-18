@@ -1095,3 +1095,14 @@ For graph tasks:
 Always follow:
 - `skills/01_project_architecture.md`
 - `skills/11_code_quality_testing.md`
+## Workflow hiện tại cho Phase 3+
+
+- Code, chỉnh sửa, review và chạy unit test nhẹ trên máy Windows local.
+- Commit/push code từ Windows lên branch làm việc.
+- GX10 chỉ dùng để `git pull` code mới và chạy các job nặng:
+  - build/rebuild BM25, dense/vector, exact DuckDB index;
+  - smoke test với full processed corpus;
+  - các bước cần GPU hoặc cần dữ liệu/index full.
+- Không commit generated artifacts từ GX10 như `data/processed/exact_index.duckdb`, `data/processed/exact_index.json`, Qdrant/OpenSearch data, cache, logs.
+- Với dense/vector trên GX10, ưu tiên chạy trong NVIDIA PyTorch container; với exact DuckDB và BM25 có thể chạy ngoài container nếu dependency đủ.
+- Khi sang session chat mới, tiếp tục theo nguyên tắc: Codex sửa code trên Windows, người dùng tự chạy lệnh validate trên GX10 và gửi log pass/fail.

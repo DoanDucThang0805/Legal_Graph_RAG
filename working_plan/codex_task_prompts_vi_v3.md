@@ -2399,3 +2399,28 @@ Chỉ trả về review findings và đề xuất fix theo mức:
 - should fix
 - nice to have
 ```
+## Workflow mặc định cho các session Phase 3+
+
+Bạn đang code trong repository Legal_Graph_RAG.
+
+Workflow vận hành hiện tại:
+- Code/edit/review/unit test nhẹ thực hiện trên máy Windows local.
+- GX10 là môi trường chạy nặng và validation full với dữ liệu/index thật.
+- Sau khi code xong, Codex chỉ liệt kê lệnh để người dùng tự chạy trên GX10; không tự chạy terminal thay người dùng.
+- Người dùng sẽ `git pull` trên GX10 và gửi log pass/fail lại cho Codex.
+- Không commit generated artifacts từ GX10:
+  - `data/processed/exact_index.duckdb`
+  - `data/processed/exact_index.json`
+  - Qdrant/OpenSearch data/volumes
+  - cache, logs, temporary outputs
+- Dense/vector jobs trên GX10 nên chạy trong NVIDIA PyTorch container.
+- BM25 và exact DuckDB có thể chạy ngoài container nếu dependency đầy đủ.
+
+Khi báo cáo cuối cho Phase 3+ luôn gồm:
+- Files changed.
+- Logic thay đổi.
+- Acceptance Criteria đã đạt/chưa đạt.
+- Test result.
+- Risk còn lại.
+- Lệnh người dùng cần tự chạy trên Windows/GX10.
+- Expected outputs.

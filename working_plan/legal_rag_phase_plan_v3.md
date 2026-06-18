@@ -3251,4 +3251,22 @@ Một task chỉ được coi là xong khi:
 [ ] Không tự chạy lệnh thay người dùng.
 [ ] Nếu có test, pytest tương ứng pass khi người dùng chạy.
 ```
+## Workflow vận hành từ Phase 3 trở đi
+
+- Môi trường code chính: máy Windows local.
+- Môi trường chạy nặng: GX10.
+- Codex thực hiện code/edit/test unit nhẹ trên Windows; người dùng tự chạy các lệnh validate nặng trên GX10 và gửi log lại.
+- Quy trình khuyến nghị:
+  1. Code trên Windows.
+  2. Chạy unit test nhẹ trên Windows nếu phù hợp.
+  3. Commit/push lên branch làm việc.
+  4. GX10 `git pull`.
+  5. GX10 chạy smoke/full validation với dữ liệu và index thật.
+- Không commit generated artifacts từ GX10:
+  - `data/processed/exact_index.duckdb`
+  - `data/processed/exact_index.json`
+  - Qdrant/OpenSearch volumes/data
+  - cache, logs, temporary outputs
+- Dense/vector jobs trên GX10 nên chạy trong NVIDIA PyTorch container. BM25 và exact DuckDB có thể chạy ngoài container nếu dependency đầy đủ.
+- Phase 3+ phải tách rõ code change và runtime validation: báo cáo cuối cần ghi lệnh GX10 cần chạy, expected output, và trạng thái pass/fail dựa trên log người dùng cung cấp.
 
