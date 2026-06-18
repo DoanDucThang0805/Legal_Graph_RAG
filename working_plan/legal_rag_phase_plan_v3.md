@@ -1729,6 +1729,464 @@ PY
 ```
 
 ---
+## Task ID: P2.T5-OPTIMIZE-EXACT-INDEX-RUNTIME
+
+Bạn đang code trong repository `Legal_Graph_RAG`.
+
+Trước khi code, hãy đọc:
+
+* `context.md`
+* `legal_rag_phase_plan_v3.md`
+* `codex_task_prompts_vi_v3.md`
+* `backend/indexing/build_exact_index.py` nếu đã tồn tại
+* `tests/test_build_exact_index.py` nếu đã tồn tại
+* `skills/11_code_quality_testing.md`
+
+### Bối cảnh hiện tại
+
+P2.T5 đã build được file:
+
+```text
+data/processed/exact_index.json
+```
+
+Kết quả kiểm tra:
+
+```text
+size_gb: ~1.9GB
+article_count: 1,015,680
+articles: 1,015,680
+by_law_id: 51,522
+by_article_no: 1,520
+accounting_accounts: 726
+deadline_numbers: 1,624
+sanction_terms: 29,997
+```
+
+`exact_index.json` đọc được và không lỗi JSON. `articles` không chứa `article_text`, chỉ chứa metadata ngắn:
+
+```text
+article_id
+law_id
+law_title
+article_no
+article_title
+source_url
+domain
+status
+```
+
+Vấn đề chính: `exact_index.json` quá lớn vì các inverted indexes lưu lặp lại `article_id` dài nhiều lần. Nếu Phase 4 runtime dùng `json.load()` file 1.9GB thì tốn RAM, startup chậm và không phù hợp để chạy retrieval nhiều lần.
+
+### Mục tiêu task
+
+Tối ưu P2.T5 để tạo thêm exact index runtime-friendly dạng thư mục nhiều file Parquet/JSON metadata, thay vì phụ thuộc vào một file JSON lớn.
+
+Mục tiêu mới:
+
+```text
+data/processed/exact_index/
+├── articles.parquet
+├── by_law_id.parquet
+├── by_article_no.parquet
+├── by_law_article.parquet
+├── accounting_accounts.parquet
+├── deadline_numbers.parquet
+├── sanction_terms.parquet
+└── metadata.json
+```
+
+Có thể giữ `data/processed/exact_index.json` như artifact debug/backward-compatible nếu code hiện tại cần, nhưng runtime Phase 4 nên ưu tiên đọc thư mục `data/processed/exact_index/`.
+
+### Yêu cầu thiết kế bắt buộc
+
+1. Exact index vẫn chỉ đọc:
+
+```text
+data/processed/legal_articles.parquet
+```
+
+2. Không đọc:
+
+```text
+data/processed/legal_article_chunks.parquet
+```
+
+3. Không dùng OpenSearch/Qdrant.
+
+4. Không gọi LLM.
+
+5. Không sinh `results.json`.
+
+6. Không chọn final `relevant_articles`.
+
+7. Không sửa BM25/vector index logic.
+
+8. Không thay đổi canonical `legal_articles.parquet`.
+
+9. Không dùng `chunk_id` trong exact index.
+
+10. Exact index runtime artifact phải tránh lặp chuỗi `article_id` dài quá nhiều lần bằng cách dùng `article_idx` integer.
+
+### Schema đề xuất
+
+#### 1. `articles.parquet`
+
+Mỗi dòng là một canonical article.
+
+Required columns:
+
+```text
+article_idx
+article_id
+law_id
+law_title
+article_no
+article_title
+source_url
+domain
+status
+normalized_law_id
+normalized_law_title
+normalized_article_no
+relevant_doc_string
+relevant_article_string
+```
+
+Yêu cầu:
+
+```text
+article_idx là int liên tục từ 0 đến n-1.
+article_id unique.
+Không có duplicate article_idx.
+Không chứa article_text để tránh file quá lớn.
+relevant_doc_string = law_id|law_title
+relevant_article_string = law_id|law_title|article_no
+```
+
+#### 2. `by_law_id.parquet`
+
+Long-table lookup:
+
+```text
+key
+article_idx
+```
+
+Trong đó `key` là `normalized_law_id`.
+
+#### 3. `by_article_no.parquet`
+
+Long-table lookup:
+
+```text
+key
+article_idx
+```
+
+Trong đó `key` là `normalized_article_no`.
+
+Lưu ý: một `article_no` như “Điều 4” có thể map tới rất nhiều `article_idx`, không được assume unique.
+
+#### 4. `by_law_article.parquet`
+
+Long-table lookup cho law + article.
+
+Required columns:
+
+```text
+key
+article_idx
+key_type
+```
+
+Trong đó `key_type` có thể là:
+
+```text
+law_id_article_no
+law_title_article_no
+```
+
+Key nên được normalize ổn định, ví dụ:
+
+```text
+{normalized_law_id}::{normalized_article_no}
+{normalized_law_title}::{normalized_article_no}
+```
+
+#### 5. `accounting_accounts.parquet`
+
+Long-table lookup:
+
+```text
+key
+article_idx
+```
+
+Trong đó `key` là mã tài khoản kế toán hoặc account pattern đã extract.
+
+#### 6. `deadline_numbers.parquet`
+
+Long-table lookup:
+
+```text
+key
+article_idx
+```
+
+Trong đó `key` là các biểu thức thời hạn/số ngày/số tháng/năm đã extract nếu logic hiện tại đã có.
+
+#### 7. `sanction_terms.parquet`
+
+Long-table lookup:
+
+```text
+key
+article_idx
+```
+
+Trong đó `key` là term/amount/pattern liên quan xử phạt nếu logic hiện tại đã có.
+
+#### 8. `metadata.json`
+
+Required fields:
+
+```json
+{
+  "article_count": 1015680,
+  "law_count": 51522,
+  "by_law_id_rows": 0,
+  "by_article_no_rows": 0,
+  "by_law_article_rows": 0,
+  "accounting_accounts_rows": 0,
+  "deadline_numbers_rows": 0,
+  "sanction_terms_rows": 0,
+  "source_file": "data/processed/legal_articles.parquet",
+  "format_version": "exact_index_parquet_v1"
+}
+```
+
+Số rows phải ghi đúng theo artifact thực tế.
+
+### Function/API cần có
+
+Trong `backend/indexing/build_exact_index.py`, tạo hoặc sửa function:
+
+```python
+def build_exact_index(
+    input_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    *,
+    recreate: bool = False,
+    write_legacy_json: bool = False,
+) -> None:
+    ...
+```
+
+Yêu cầu:
+
+```text
+input_path default = data/processed/legal_articles.parquet từ settings/path config nếu có.
+output_dir default = data/processed/exact_index.
+Nếu recreate=True thì xóa hoặc overwrite output_dir an toàn.
+write_legacy_json=False mặc định để tránh tạo lại file JSON 1.9GB nếu không cần.
+Nếu write_legacy_json=True thì có thể tạo exact_index.json backward-compatible.
+```
+
+Nếu hiện tại code đã có `build_exact_index()` signature khác, hãy giữ backward compatibility nếu hợp lý, nhưng ưu tiên runtime artifact mới.
+
+### Runtime helper optional nhưng khuyến nghị
+
+Nếu phù hợp, tạo helper class nhẹ:
+
+```python
+class ExactIndexStore:
+    def __init__(self, index_dir: str | Path):
+        ...
+
+    def load_articles(self) -> pl.DataFrame:
+        ...
+
+    def lookup_by_law_id(self, normalized_law_id: str) -> pl.DataFrame:
+        ...
+
+    def lookup_by_article_no(self, normalized_article_no: str) -> pl.DataFrame:
+        ...
+
+    def lookup_by_law_article(self, key: str) -> pl.DataFrame:
+        ...
+```
+
+Không bắt buộc phải tối ưu bằng DuckDB ngay, nhưng nếu dùng DuckDB để query Parquet lazy được thì càng tốt. Không được load toàn bộ `exact_index.json` trong runtime helper.
+
+### Files dự kiến sửa/tạo
+
+Có thể sửa/tạo:
+
+```text
+backend/indexing/build_exact_index.py
+tests/test_build_exact_index.py
+scripts/02_build_exact_index.py
+```
+
+Nếu đã có file tương ứng, cập nhật thay vì tạo duplicate.
+
+Không sửa:
+
+```text
+backend/indexing/build_bm25_index.py
+backend/indexing/build_vector_index.py
+backend/retrieval/*
+```
+
+trừ khi thật sự cần cập nhật import nhỏ và phải báo rõ trước.
+
+### Acceptance Criteria
+
+* [ ] `build_exact_index(recreate=True)` tạo được thư mục `data/processed/exact_index/`.
+* [ ] Tạo đủ các files:
+
+  * `articles.parquet`
+  * `by_law_id.parquet`
+  * `by_article_no.parquet`
+  * `by_law_article.parquet`
+  * `accounting_accounts.parquet`
+  * `deadline_numbers.parquet`
+  * `sanction_terms.parquet`
+  * `metadata.json`
+* [ ] `articles.parquet` có `article_idx` integer unique.
+* [ ] `articles.parquet` có `article_id` unique.
+* [ ] `articles.parquet` không chứa `article_text`.
+* [ ] Inverted indexes dùng `article_idx`, không dùng lặp `article_id`.
+* [ ] `relevant_doc_string` đúng format `law_id|law_title`.
+* [ ] `relevant_article_string` đúng format `law_id|law_title|article_no`.
+* [ ] `by_article_no.parquet` cho phép một key map nhiều `article_idx`.
+* [ ] `by_law_article.parquet` hỗ trợ cả key theo law_id + article_no và law_title + article_no.
+* [ ] `metadata.json` ghi đúng row counts.
+* [ ] Không gọi OpenSearch/Qdrant/LLM.
+* [ ] Không chạy lệnh thay tôi.
+
+### Test cần thêm/cập nhật
+
+Tạo/cập nhật `tests/test_build_exact_index.py`.
+
+Test tối thiểu dùng fixture nhỏ, không dùng full corpus:
+
+1. Build exact index từ fixture `legal_articles.parquet` nhỏ.
+2. Output đủ files.
+3. `articles.parquet` không có `article_text`.
+4. `article_idx` unique.
+5. `article_id` unique.
+6. `relevant_doc_string` đúng.
+7. `relevant_article_string` đúng.
+8. `by_law_article` lookup được đúng article theo law_id + article_no.
+9. `by_law_article` lookup được đúng article theo law_title + article_no.
+10. `by_article_no` có thể trả nhiều article cho cùng “Điều 1”.
+11. `metadata.json` có `format_version = exact_index_parquet_v1`.
+
+### Lệnh tôi sẽ tự chạy
+
+Sau khi bạn code xong, tôi sẽ chạy:
+
+```bash
+pytest tests/test_build_exact_index.py -q
+```
+
+Build exact index full:
+
+```bash
+python - <<'PY'
+from backend.indexing.build_exact_index import build_exact_index
+
+build_exact_index(recreate=True, write_legacy_json=False)
+print("runtime-friendly exact index built")
+PY
+```
+
+Validate output:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+import polars as pl
+
+index_dir = Path("data/processed/exact_index")
+
+print("files:", sorted(p.name for p in index_dir.iterdir()))
+
+with (index_dir / "metadata.json").open("r", encoding="utf-8") as f:
+    meta = json.load(f)
+
+print(meta)
+
+articles = pl.read_parquet(index_dir / "articles.parquet")
+print("articles:", articles.shape)
+print("article_id unique:", articles["article_id"].n_unique())
+print("article_idx unique:", articles["article_idx"].n_unique())
+print("has article_text:", "article_text" in articles.columns)
+
+for name in [
+    "by_law_id.parquet",
+    "by_article_no.parquet",
+    "by_law_article.parquet",
+    "accounting_accounts.parquet",
+    "deadline_numbers.parquet",
+    "sanction_terms.parquet",
+]:
+    df = pl.read_parquet(index_dir / name)
+    print(name, df.shape, df.columns)
+PY
+```
+
+Expected:
+
+* `articles` khoảng 1,015,680 rows.
+* `article_id unique` = số rows.
+* `article_idx unique` = số rows.
+* `has article_text: False`.
+* Các inverted index có columns gồm `key`, `article_idx`, và thêm `key_type` nếu cần.
+* Tổng size thư mục `exact_index/` phải nhỏ hơn đáng kể so với `exact_index.json` 1.9GB.
+
+### Quy trình làm việc bắt buộc
+
+Trước khi sửa code, hãy báo cáo:
+
+```text
+Scope bạn hiểu:
+- ...
+
+Files dự kiến sửa:
+- ...
+
+Test command tôi cần chạy:
+- ...
+```
+
+Sau đó dừng và chờ tôi xác nhận, trừ khi tôi ghi rõ “triển khai luôn”.
+
+Sau khi hoàn thành, báo cáo:
+
+```text
+Files changed:
+- ...
+
+Logic thay đổi:
+- ...
+
+Acceptance Criteria:
+- [x] ...
+- [ ] ...
+
+Test result:
+- Chưa chạy — người dùng cần chạy lệnh bên dưới.
+
+Risk còn lại:
+- ...
+
+Lệnh tôi cần chạy:
+- ...
+```
 
 ## P2.T6 — Build indexes orchestration
 
