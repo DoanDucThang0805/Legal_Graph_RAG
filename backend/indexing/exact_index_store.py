@@ -8,18 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import duckdb
-
-from backend.indexing.build_exact_index import (
-    extract_accounting_accounts,
-    extract_deadline_numbers,
-    extract_sanction_terms,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +29,29 @@ EXACT_INDEX_TABLES: tuple[str, ...] = (
     "exact_accounting_accounts",
     "exact_deadline_numbers",
     "exact_sanction_terms",
+)
+
+ACCOUNTING_ACCOUNT_PATTERN = re.compile(
+    r"(?:tài\s*khoản|tai\s*khoan|tk)\s*(?:số|so)?\s*(\d{3,4})",
+    re.IGNORECASE,
+)
+DEADLINE_PATTERN = re.compile(
+    r"\b(\d{1,4})\s*(ngày|ngay|tháng|thang|năm|nam|giờ|gio|tuần|tuan)\b",
+    re.IGNORECASE,
+)
+SANCTION_TERMS: tuple[str, ...] = (
+    "phạt tiền",
+    "phat tien",
+    "xử phạt",
+    "xu phat",
+    "vi phạm",
+    "vi pham",
+    "đình chỉ",
+    "dinh chi",
+    "tước quyền",
+    "tuoc quyen",
+    "thu hồi",
+    "thu hoi",
 )
 
 
@@ -198,6 +217,20 @@ def build_exact_duckdb_index(
     }
 
 
+def extract_accounting_accounts(text: str) -> list[str]:
+    return sorted(set(ACCOUNTING_ACCOUNT_PATTERN.findall(_normalize_for_feature_extract(text))))
+
+
+def extract_deadline_numbers(text: str) -> list[str]:
+    normalized = _normalize_for_feature_extract(text)
+    return sorted({f"{number} {unit}" for number, unit in DEADLINE_PATTERN.findall(normalized)})
+
+
+def extract_sanction_terms(text: str) -> list[str]:
+    normalized = _normalize_for_feature_extract(text)
+    return sorted({term for term in SANCTION_TERMS if term in normalized})
+
+
 def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
     for table in EXACT_INDEX_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
@@ -332,6 +365,13 @@ def _first_existing_column_expr(columns: set[str], candidates: tuple[str, ...]) 
 
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def _normalize_for_feature_extract(text: str) -> str:
+    lowered = str(text or "").lower()
+    decomposed = unicodedata.normalize("NFD", lowered)
+    without_marks = "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+    return re.sub(r"\s+", " ", without_marks).strip()
 
 
 def _write_metadata(conn: duckdb.DuckDBPyConnection, source_path: Path, article_count: int) -> None:

@@ -54,7 +54,11 @@ def main(argv: Sequence[str] | None = None, *, builders: IndexBuilders | None = 
     _configure_logging(args.log_level)
     paths = build_index_paths(Path(args.processed_dir) if args.processed_dir else None)
     selected = _normalize_only(args.only)
-    active_builders = builders or load_builders()
+    active_builders = builders or load_builders(
+        selected=selected,
+        write_legacy_json=args.write_legacy_json,
+        prepare_index_corpus=args.prepare_index_corpus,
+    )
 
     if args.prepare_index_corpus:
         LOGGER.info("Preparing derived index corpus before build")
@@ -149,22 +153,58 @@ def validate_required_files(paths: Sequence[Path], *, purpose: str) -> None:
     )
 
 
-def load_builders() -> IndexBuilders:
-    from backend.indexing.build_bm25_index import build_all_bm25_indexes
-    from backend.indexing.build_exact_index import build_exact_index
-    from backend.indexing.build_vector_index import build_all_vector_indexes
-    from backend.indexing.exact_index_store import build_exact_duckdb_index
-    from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
-    from backend.knowledge_processing.prepare_index_corpus import prepare_index_corpus
+def load_builders(
+    *,
+    selected: str,
+    write_legacy_json: bool,
+    prepare_index_corpus: bool,
+) -> IndexBuilders:
+    build_bm25 = _unavailable_builder("BM25 builder was not loaded for this mode")
+    build_vector = _unavailable_builder("Dense/vector builder was not loaded for this mode")
+    build_exact_duckdb = _unavailable_builder("Exact DuckDB builder was not loaded for this mode")
+    build_exact_json = _unavailable_builder("Legacy JSON exact builder was not loaded")
+    embedder_factory = _unavailable_builder("Dense embedder was not loaded for this mode")
+    prepare_corpus = _unavailable_builder("prepare_index_corpus was not loaded")
+
+    if selected in {"bm25", "all-no-dense"}:
+        from backend.indexing.build_bm25_index import build_all_bm25_indexes
+
+        build_bm25 = build_all_bm25_indexes
+
+    if selected == "dense":
+        from backend.indexing.build_vector_index import build_all_vector_indexes
+        from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
+
+        build_vector = build_all_vector_indexes
+        embedder_factory = VNLegalLALEmbedder
+
+    if selected in {"exact", "all-no-dense"}:
+        from backend.indexing.exact_index_store import build_exact_duckdb_index
+
+        build_exact_duckdb = build_exact_duckdb_index
+        if write_legacy_json:
+            from backend.indexing.build_exact_index import build_exact_index
+
+            build_exact_json = build_exact_index
+
+    if prepare_index_corpus:
+        from backend.knowledge_processing.prepare_index_corpus import prepare_index_corpus as prepare_corpus
 
     return IndexBuilders(
-        build_bm25=build_all_bm25_indexes,
-        build_vector=build_all_vector_indexes,
-        build_exact_duckdb=build_exact_duckdb_index,
-        build_exact_json=build_exact_index,
-        embedder_factory=VNLegalLALEmbedder,
-        prepare_index_corpus=prepare_index_corpus,
+        build_bm25=build_bm25,
+        build_vector=build_vector,
+        build_exact_duckdb=build_exact_duckdb,
+        build_exact_json=build_exact_json,
+        embedder_factory=embedder_factory,
+        prepare_index_corpus=prepare_corpus,
     )
+
+
+def _unavailable_builder(message: str) -> Callable[..., object]:
+    def _raise_unavailable(*args: object, **kwargs: object) -> object:
+        raise RuntimeError(message)
+
+    return _raise_unavailable
 
 
 def _normalize_only(value: str) -> str:
