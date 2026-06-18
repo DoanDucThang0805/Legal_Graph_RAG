@@ -1,5 +1,7 @@
 # CONTEXT.md — Legal Graph RAG Competition Project
 
+> Bản cập nhật: Phase 2 = Indexing; legal BM25/vector dùng `legal_article_chunks.parquet`; exact/citation dùng `legal_articles.parquet`; Neo4j ở Phase 8.
+
 ## 0. Mục tiêu tài liệu
 
 File này dùng làm **project context cho Codex/Coding Agent** khi phát triển repo `Legal_Graph_RAG`.
@@ -198,13 +200,40 @@ max_new_tokens: 700
 
 ---
 
-## 4. Kiến trúc tổng thể
+## 4. Kiến trúc tổng thể và roadmap authoritative
 
-Pipeline cuối cùng nên triển khai theo phase.
+### 4.1. Roadmap hiện tại
 
-### Phase 1 — Baseline retrieval không Neo4j
+Một số ghi chú cũ từng dùng roadmap milestone lớn và đặt graph expansion ở giai đoạn sớm hơn. Roadmap cũ này **không còn là cách đánh số phase triển khai chi tiết**.
 
-Mục tiêu: chạy end-to-end, sinh được `results.json`, retrieval đủ tốt.
+Từ thời điểm hiện tại, file `legal_rag_phase_plan_v3.md` là source of truth cho phase/task implementation.
+
+Roadmap triển khai chi tiết hiện tại:
+
+```text
+Phase 0 — Project setup
+Phase 1 — Data loading + canonical corpus
+Phase 2 — Indexing
+Phase 3 — Query analysis
+Phase 4 — Hybrid retrieval baseline
+Phase 5 — QA generation + submission
+Phase 6 — Evaluation + error analysis
+Phase 7 — Reranker / LLM verifier
+Phase 8 — Neo4j Graph Expansion
+Phase 9 — Fine-tuning preparation
+```
+
+Quy tắc bắt buộc:
+
+```text
+Current Phase 2 = Indexing only.
+Không triển khai Neo4j trong current Phase 2.
+Neo4j chỉ được triển khai ở Phase 8.
+```
+
+### 4.2. Baseline retrieval không Neo4j
+
+Baseline cần chạy được trước khi thêm Neo4j:
 
 ```text
 Test questions
@@ -216,8 +245,8 @@ Query Analyzer
 - legal entity extractor
 ↓
 Hybrid Retrieval
-- BM25 legal_articles
-- Dense legal_articles bằng vnlegal-lal
+- BM25 legal chunks
+- Dense legal chunks bằng vnlegal-lal
 - BM25 phapdien
 - Dense phapdien bằng vnlegal-lal
 - Exact search theo điều, luật, mã, tài khoản, thời hạn, mức phạt
@@ -235,50 +264,50 @@ Citation Postprocess
 Submission Builder
 ```
 
-### Phase 2 — Thêm Neo4j Graph Expansion
-
-Neo4j **không thay thế** OpenSearch/Qdrant. Neo4j chỉ dùng để mở rộng quan hệ pháp lý.
+### 4.3. Nguồn dữ liệu cho retrieval và citation
 
 ```text
-Hybrid retrieval top candidates
-↓
-Neo4j graph expansion
-- same law neighbor articles
-- related articles
-- phapdien → VBPL mapping
-- law guides/amends/replaces
-- anle applies article
-↓
-Graph-aware scoring
-↓
-Rerank/select final articles
+legal_articles.parquet
+→ canonical registry
+→ dùng để sinh relevant_docs / relevant_articles / citation
+→ không index trực tiếp full article_text vào BM25/vector baseline
+
+legal_article_chunks.parquet
+→ derived index corpus
+→ dùng cho BM25 legal retrieval và dense legal retrieval
+→ mỗi chunk phải giữ parent article_id
+
+phapdien_articles_index.parquet
+→ derived phapdien index corpus
+→ dùng cho BM25/dense phapdien retrieval
+→ đã loại row có content_text rỗng
+
+anle_units.parquet
+→ auxiliary retrieval source
+→ không dùng làm citation chính thức
+
+phapdien_to_vbpl_map.parquet
+→ map phapdien_id về canonical legal_article_id
 ```
 
-### Phase 3 — Reranker / LLM verifier
+### 4.4. Nguyên tắc parent-child retrieval
+
+Khi retrieval hit vào legal chunk:
 
 ```text
-Retrieve top 100–150
+chunk_id
 ↓
-Rerank top candidates
+article_id
 ↓
-LLM verifier top 20
+legal_articles.parquet
 ↓
-Select final articles
+relevant_docs / relevant_articles
 ```
 
-### Phase 4 — Fine-tuning
+`chunk_id` chỉ là metadata retrieval. Không được dùng `chunk_id` để sinh `relevant_docs` hoặc `relevant_articles`.
 
-Chỉ fine-tune sau khi đã có baseline và log lỗi.
+Nếu nhiều chunk cùng trỏ về một `article_id`, retrieval layer phải deduplicate/group về parent `article_id` trước khi đưa vào article selector.
 
-Ưu tiên:
-
-```text
-1. Fine-tune reranker
-2. Fine-tune embedding nếu dense retrieval yếu
-3. Fine-tune generator nếu answer diễn đạt kém
-```
-
----
 
 ## 5. Tech stack
 
@@ -313,8 +342,8 @@ PostgreSQL hoặc DuckDB:
 - logs
 
 Neo4j:
-- dùng từ Phase 2
-- legal knowledge graph
+- dùng từ Phase 8
+- legal knowledge graph / graph expansion
 ```
 
 ### ML / LLM
@@ -476,7 +505,9 @@ Legal_Graph_RAG/
 │   │   ├── test_questions.parquet
 │   │   ├── legal_documents.parquet
 │   │   ├── legal_articles.parquet
+│   │   ├── legal_article_chunks.parquet
 │   │   ├── phapdien_articles.parquet
+│   │   ├── phapdien_articles_index.parquet
 │   │   ├── phapdien_to_vbpl_map.parquet
 │   │   ├── anle_units.parquet
 │   │   └── test_questions_analyzed.parquet
@@ -533,7 +564,9 @@ data/processed/
 ├── test_questions.parquet
 ├── legal_documents.parquet
 ├── legal_articles.parquet
+├── legal_article_chunks.parquet
 ├── phapdien_articles.parquet
+├── phapdien_articles_index.parquet
 ├── anle_units.parquet
 └── phapdien_to_vbpl_map.parquet
 ```
@@ -543,10 +576,17 @@ data/processed/
 ```text
 phapdien:
 - dùng để tìm
+- Phase 2 index từ phapdien_articles_index.parquet, không index file gốc có empty content
 
 vbpl/legal_articles:
 - dùng để nộp
 - nguồn duy nhất sinh relevant_articles/relevant_docs
+- không index trực tiếp full article_text vào BM25/vector baseline
+
+legal_article_chunks:
+- dùng để tìm bằng BM25/vector
+- mỗi chunk phải giữ parent article_id
+- chunk_id không bao giờ dùng làm citation
 
 anle:
 - dùng để phụ trợ reasoning

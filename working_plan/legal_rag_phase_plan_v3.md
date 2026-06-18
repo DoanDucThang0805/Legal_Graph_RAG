@@ -1,6 +1,7 @@
-# Legal Graph RAG — Phase & Task Plan v2
+# Legal Graph RAG — Phase & Task Plan v3.1
 
 > File liên quan trực tiếp: `codex_task_prompts_vi_v3.md`  
+> Bản cập nhật: Phase 2 dùng `legal_article_chunks.parquet` cho BM25/vector; Neo4j ở Phase 8.  
 > Cách dùng: mở file prompt, chọn đúng `Task ID` tương ứng trong plan này, copy prompt cho Codex.  
 > Quy tắc vận hành: **Codex chỉ sửa code và đề xuất lệnh kiểm thử; người dùng là người chạy lệnh.**
 
@@ -936,43 +937,6 @@ ls -lh data/processed
 Tạo đủ 6 parquet files của Phase 1.
 ```
 
----
-
-# Phase 2 — Indexing
-
-## P2.T1 — Infrastructure clients
-
-### Codex Prompt
-
-Dùng prompt: `P2.T1`.
-
-### Deliverables
-
-```text
-backend/infrastructure/search_engine/opensearch_client.py
-backend/infrastructure/vector_store/qdrant_client.py
-backend/infrastructure/database/duckdb_client.py
-```
-
-### Acceptance Criteria
-
-```text
-[ ] OpenSearch client có health_check().
-[ ] Qdrant client có health_check().
-[ ] DuckDB helper đọc parquet được.
-[ ] Không tạo index ở import-time.
-```
-
-### User-run commands
-
-```bash
-python - <<'PY'
-from backend.infrastructure.database.duckdb_client import DuckDBClient
-db = DuckDBClient()
-print("duckdb ok")
-PY
-```
-
 ## P1.T11 — Prepare Indexable Corpus
 
 ### Mục tiêu
@@ -1441,6 +1405,78 @@ Khi retrieval hit vào `legal_article_chunks`, hệ thống phải group kết q
 
 ---
 
+# Phase 2 — Indexing
+
+## Nguyên tắc chung của Phase 2
+
+Phase 2 xây dựng các index phục vụ retrieval. Phase 2 **không sinh citation** và **không thay đổi canonical corpus**.
+
+Nguồn dữ liệu bắt buộc:
+
+```text
+Legal BM25/vector retrieval:
+- data/processed/legal_article_chunks.parquet
+
+Phapdien BM25/vector retrieval:
+- data/processed/phapdien_articles_index.parquet
+
+Anle retrieval:
+- data/processed/anle_units.parquet
+
+Exact index / canonical lookup:
+- data/processed/legal_articles.parquet
+```
+
+Quy tắc bắt buộc:
+
+```text
+[ ] Không index trực tiếp full article_text từ legal_articles.parquet vào BM25/vector legal retrieval.
+[ ] BM25/vector legal retrieval phải dùng legal_article_chunks.parquet.
+[ ] legal_articles.parquet chỉ dùng cho exact lookup, canonical registry, citation và submission.
+[ ] chunk_id không được dùng làm citation.
+[ ] Retrieval hits từ legal chunks phải giữ parent article_id.
+[ ] Retrieval layer phải dedup/group chunk hits về article_id trước article selection.
+[ ] Phapdien index phải dùng phapdien_articles_index.parquet, không dùng phapdien_articles.parquet gốc.
+[ ] Neo4j không thuộc Phase 2; Neo4j chỉ triển khai ở Phase 8.
+```
+
+---
+
+## P2.T1 — Infrastructure clients
+
+### Codex Prompt
+
+Dùng prompt: `P2.T1`.
+
+### Deliverables
+
+```text
+backend/infrastructure/search_engine/opensearch_client.py
+backend/infrastructure/vector_store/qdrant_client.py
+backend/infrastructure/database/duckdb_client.py
+```
+
+### Acceptance Criteria
+
+```text
+[ ] OpenSearch client có health_check().
+[ ] Qdrant client có health_check().
+[ ] DuckDB helper đọc parquet được.
+[ ] Không tạo index ở import-time.
+```
+
+### User-run commands
+
+```bash
+python - <<'PY'
+from backend.infrastructure.database.duckdb_client import DuckDBClient
+db = DuckDBClient()
+print("duckdb ok")
+PY
+```
+
+---
+
 ## P2.T2 — vnlegal-lal embedding wrapper
 
 ### Codex Prompt
@@ -1463,6 +1499,7 @@ backend/infrastructure/embedding_models/vnlegal_lal.py
 [ ] Output vector dimension = 1024 nếu model load đúng.
 [ ] Có batching.
 [ ] Có normalize vector.
+[ ] Với vnlegal-lal, ưu tiên AutoModel + last-token pooling theo model card; không rely vào SentenceTransformer fallback mean pooling nếu đã có wrapper chuẩn.
 ```
 
 ### User-run commands
@@ -1470,7 +1507,7 @@ backend/infrastructure/embedding_models/vnlegal_lal.py
 ```bash
 python - <<'PY'
 from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
-m = VNLegalLALEmbedder()
+m = VNLegalLALEmbedder(device="cuda", batch_size=2, max_length=512)
 v = m.encode_query("Doanh nghiệp nhỏ và vừa là gì?")
 print(len(v), v[:5])
 PY
@@ -1490,14 +1527,60 @@ Dùng prompt: `P2.T3`.
 backend/indexing/build_bm25_index.py
 ```
 
+### Inputs
+
+```text
+data/processed/legal_article_chunks.parquet
+data/processed/phapdien_articles_index.parquet
+data/processed/anle_units.parquet
+```
+
+### Indexes
+
+```text
+legal_article_chunks_bm25
+phapdien_articles_bm25
+anle_units_bm25
+```
+
+### Legal chunk indexed fields
+
+```text
+chunk_text
+law_title
+article_no
+article_title
+domain
+status
+```
+
+### Legal chunk payload fields
+
+```text
+chunk_id
+article_id
+law_id
+law_title
+article_no
+article_title
+chunk_index
+source_url
+domain
+status
+```
+
 ### Acceptance Criteria
 
 ```text
-[ ] Build được legal_articles_bm25.
+[ ] Build được legal_article_chunks_bm25.
 [ ] Build được phapdien_articles_bm25.
 [ ] Build được anle_units_bm25.
-[ ] Có mapping field hợp lý.
+[ ] Legal BM25 đọc legal_article_chunks.parquet, không đọc legal_articles.parquet.
+[ ] Legal BM25 index dùng chunk_text làm text chính.
+[ ] Payload legal BM25 giữ cả chunk_id và parent article_id.
+[ ] Phapdien BM25 đọc phapdien_articles_index.parquet.
 [ ] Có recreate flag.
+[ ] Có max_rows/sample option nếu phù hợp.
 ```
 
 ### User-run commands
@@ -1505,8 +1588,8 @@ backend/indexing/build_bm25_index.py
 ```bash
 python - <<'PY'
 from backend.indexing.build_bm25_index import build_all_bm25_indexes
-build_all_bm25_indexes(recreate=True)
-print("bm25 indexes built")
+build_all_bm25_indexes(recreate=True, max_rows=1000)
+print("bm25 smoke indexes built")
 PY
 ```
 
@@ -1524,24 +1607,80 @@ Dùng prompt: `P2.T4`.
 backend/indexing/build_vector_index.py
 ```
 
+### Inputs
+
+```text
+data/processed/legal_article_chunks.parquet
+data/processed/phapdien_articles_index.parquet
+data/processed/anle_units.parquet
+```
+
+### Qdrant collections
+
+```text
+legal_article_chunks_dense
+phapdien_articles_dense
+anle_units_dense
+```
+
+### Legal chunk text format để embed
+
+```text
+Tên văn bản: {law_title}
+Điều: {article_no}
+Tiêu đề điều: {article_title}
+Nội dung chunk:
+{chunk_text}
+```
+
+### Legal chunk payload fields
+
+```text
+chunk_id
+article_id
+law_id
+law_title
+article_no
+article_title
+chunk_index
+source_url
+domain
+status
+```
+
 ### Acceptance Criteria
 
 ```text
-[ ] Build được legal_articles_dense.
+[ ] Build được legal_article_chunks_dense.
 [ ] Build được phapdien_articles_dense.
 [ ] Build được anle_units_dense.
-[ ] Payload giữ article_id/phapdien_id/unit_id.
+[ ] Legal vector index đọc legal_article_chunks.parquet, không đọc legal_articles.parquet.
+[ ] Legal vector index embed chunk_text kèm legal context.
+[ ] Payload giữ chunk_id và parent article_id.
+[ ] Không dùng chunk_id làm canonical citation id.
+[ ] Phapdien vector đọc phapdien_articles_index.parquet.
 [ ] Có batching.
+[ ] Có recreate flag.
 [ ] Có resume/skip option nếu phù hợp.
+[ ] Nếu đổi từ article-level sang chunk-level thì phải rebuild với recreate=True, resume=False.
+[ ] Không trộn embedding từ mean pooling và last-token pooling trong cùng collection.
 ```
 
 ### User-run commands
 
 ```bash
 python - <<'PY'
+from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
 from backend.indexing.build_vector_index import build_all_vector_indexes
-build_all_vector_indexes(recreate=True)
-print("vector indexes built")
+
+embedder = VNLegalLALEmbedder(device="cuda", batch_size=8, max_length=512)
+build_all_vector_indexes(
+    recreate=True,
+    resume=False,
+    embedder=embedder,
+    max_rows=20,
+)
+print("chunk-level vector smoke test built")
 PY
 ```
 
@@ -1560,14 +1699,23 @@ backend/indexing/build_exact_index.py
 data/processed/exact_index.json hoặc parquet
 ```
 
+### Input
+
+```text
+data/processed/legal_articles.parquet
+```
+
 ### Acceptance Criteria
 
 ```text
+[ ] Exact index vẫn đọc legal_articles.parquet.
 [ ] Exact lookup theo law_id.
 [ ] Exact lookup theo article_no.
-[ ] Extract được tài khoản kế toán.
-[ ] Extract được deadline number.
+[ ] Exact lookup theo law_id + article_no.
+[ ] Extract được tài khoản kế toán nếu phù hợp.
+[ ] Extract được deadline number nếu phù hợp.
 [ ] Exact index load nhanh.
+[ ] Không dùng legal_article_chunks.parquet cho exact citation registry.
 ```
 
 ### User-run commands
@@ -1600,16 +1748,21 @@ scripts/02_build_indexes.py
 [ ] Script gọi BM25, vector, exact builders.
 [ ] Có logging từng step.
 [ ] Không chứa business logic lớn.
+[ ] Có option --only bm25|dense|exact nếu phù hợp.
+[ ] Có option --max-rows/sample-size nếu phù hợp.
+[ ] Legal BM25/dense orchestration dùng legal_article_chunks.parquet.
+[ ] Exact orchestration dùng legal_articles.parquet.
 [ ] Người dùng tự chạy script.
 ```
 
 ### User-run commands
 
 ```bash
-python scripts/02_build_indexes.py
+python scripts/02_build_indexes.py --only bm25 --max-rows 1000
+python scripts/02_build_indexes.py --only dense --max-rows 20
+python scripts/02_build_indexes.py --only exact
 ```
 
----
 
 # Phase 3 — Query Analysis
 
@@ -1823,11 +1976,15 @@ backend/retrieval/bm25_retriever.py
 ### Acceptance Criteria
 
 ```text
-[ ] search_legal_articles().
+[ ] search_legal_articles() thực chất search trên legal_article_chunks_bm25.
 [ ] search_phapdien().
 [ ] search_anle().
 [ ] Return normalized RetrievalHit objects.
 [ ] Không trả raw OpenSearch response trực tiếp cho tầng trên.
+[ ] Legal BM25 hit phải return canonical article_id.
+[ ] chunk_id chỉ nằm trong metadata.
+[ ] Nếu nhiều chunk cùng article_id, retriever hoặc fusion layer phải dedup/group về article_id.
+[ ] Không expose chunk_id như citation id.
 ```
 
 ### User-run commands
@@ -1842,7 +1999,6 @@ PY
 ```
 
 ---
-
 ## P4.T2 — Dense retriever
 
 ### Codex Prompt
@@ -1858,11 +2014,15 @@ backend/retrieval/dense_retriever.py
 ### Acceptance Criteria
 
 ```text
-[ ] search_legal_articles_dense().
+[ ] search_legal_articles_dense() thực chất search trên legal_article_chunks_dense.
 [ ] search_phapdien_dense().
 [ ] search_anle_dense().
 [ ] Dùng VNLegalLALEmbedder.encode_query().
 [ ] Return normalized RetrievalHit objects.
+[ ] Legal dense hit phải return canonical article_id.
+[ ] chunk_id chỉ nằm trong metadata.
+[ ] Nếu nhiều chunk cùng article_id, retriever hoặc fusion layer phải dedup/group về article_id.
+[ ] Không expose chunk_id như citation id.
 ```
 
 ### User-run commands
@@ -1877,7 +2037,6 @@ PY
 ```
 
 ---
-
 ## P4.T3 — Exact retriever
 
 ### Codex Prompt

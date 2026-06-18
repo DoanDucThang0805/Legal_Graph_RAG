@@ -1,6 +1,7 @@
-# Codex Task Prompts tiếng Việt v2 — Legal Graph RAG
+# Codex Task Prompts tiếng Việt v3.1 — Legal Graph RAG
 
 > File liên quan trực tiếp: `legal_rag_phase_plan_v3.md`  
+> Bản cập nhật: Phase 2 legal BM25/vector index dùng `legal_article_chunks.parquet`; exact index dùng `legal_articles.parquet`; Neo4j ở Phase 8.  
 > Cách dùng: chọn đúng `Task ID` trong plan, copy prompt tương ứng vào Codex.  
 > Quy tắc quan trọng: **Codex không chạy lệnh. Codex chỉ sửa code và đưa lệnh để người dùng tự chạy.**
 
@@ -788,6 +789,106 @@ ls -lh data/processed
 
 ---
 
+# P1.T11 — Prepare Indexable Corpus
+
+```text
+Task ID: P1.T11
+
+Chỉ triển khai P1.T11: prepare indexable corpus trước Phase 2.
+
+Hãy đọc:
+- context.md
+- legal_rag_phase_plan_v3.md
+- skills/04_canonical_article_registry.md
+- skills/06_hybrid_retrieval.md
+- skills/11_code_quality_testing.md
+
+Bối cảnh:
+Phase 1 canonical corpus đã có:
+- data/processed/legal_articles.parquet
+- data/processed/phapdien_articles.parquet
+- data/processed/anle_units.parquet
+- data/processed/phapdien_to_vbpl_map.parquet
+
+Risk cần xử lý:
+- legal_articles.article_text có outlier rất lớn, không nên index trực tiếp vào BM25/vector.
+- phapdien_articles có một số row content_text rỗng, không nên đưa vào index.
+
+Tạo/sửa:
+- backend/knowledge_processing/prepare_index_corpus.py
+- scripts/01_prepare_index_corpus.py
+- tests/test_prepare_index_corpus.py nếu phù hợp
+
+Outputs:
+- data/processed/legal_article_chunks.parquet
+- data/processed/phapdien_articles_index.parquet
+- data/processed/debug/legal_article_text_length_report.csv
+- data/processed/debug/legal_article_chunk_report.csv
+- data/processed/debug/phapdien_empty_content_report.csv
+
+Yêu cầu bắt buộc:
+1. Không sửa trực tiếp legal_articles.parquet.
+2. Không sửa trực tiếp phapdien_articles.parquet.
+3. legal_articles.parquet vẫn là source of truth cho relevant_docs/relevant_articles.
+4. legal_article_chunks.parquet chỉ phục vụ retrieval/indexing.
+5. Mỗi chunk phải giữ parent article_id.
+6. chunk_id không được dùng làm citation.
+7. Không xử lý low-confidence/unmapped phapdien trong task này.
+
+Schema legal_article_chunks.parquet:
+- chunk_id
+- article_id
+- law_id
+- law_title
+- article_no
+- article_title
+- chunk_index
+- chunk_text
+- chunk_char_len
+- source_url
+- domain
+- status
+
+Chunking default config:
+- max_chunk_chars = 3000
+- chunk_overlap_chars = 300
+- max_article_chars_for_single_doc = 12000
+- min_text_chars = 20
+
+Yêu cầu phapdien_articles_index.parquet:
+- Đọc từ phapdien_articles.parquet.
+- Loại rows có content_text null hoặc rỗng sau strip.
+- Không xóa row khỏi file gốc.
+- Giữ các field cần cho retrieval.
+
+Acceptance Criteria:
+- Tạo được legal_article_chunks.parquet.
+- Tạo được phapdien_articles_index.parquet.
+- Tạo được debug reports.
+- legal_article_chunks.parquet có chunk_id unique.
+- Mỗi chunk có parent article_id.
+- Không có chunk_text rỗng.
+- phapdien_articles_index.parquet không có content_text rỗng.
+- Không dùng chunk_id cho relevant_docs/relevant_articles.
+
+Lệnh người dùng tự chạy:
+pytest tests/test_prepare_index_corpus.py -q
+python scripts/01_prepare_index_corpus.py
+python - <<'PY'
+import polars as pl
+chunks = pl.read_parquet("data/processed/legal_article_chunks.parquet")
+phapdien_idx = pl.read_parquet("data/processed/phapdien_articles_index.parquet")
+print("chunks", chunks.shape)
+print("unique chunk_id", chunks["chunk_id"].n_unique())
+print("unique parent article_id", chunks["article_id"].n_unique())
+print("empty chunk_text", chunks.filter(pl.col("chunk_text").is_null() | (pl.col("chunk_text").str.strip_chars() == "")).height)
+print("phapdien index", phapdien_idx.shape)
+print("empty phapdien content", phapdien_idx.filter(pl.col("content_text").is_null() | (pl.col("content_text").str.strip_chars() == "")).height)
+PY
+```
+
+---
+
 # P2.T1 — Infrastructure clients
 
 ```text
@@ -889,37 +990,50 @@ Hãy đọc:
 Tạo/sửa:
 - backend/indexing/build_bm25_index.py
 
-Input:
-- data/processed/legal_articles.parquet
-- data/processed/phapdien_articles.parquet
+Inputs:
+- data/processed/legal_article_chunks.parquet
+- data/processed/phapdien_articles_index.parquet
 - data/processed/anle_units.parquet
 
 Indexes:
-- legal_articles_bm25
+- legal_article_chunks_bm25
 - phapdien_articles_bm25
 - anle_units_bm25
 
-Yêu cầu:
-- Có recreate flag.
-- Có mapping fields hợp lý.
-- Index legal article fields: law_title, article_no, article_title, article_text, domain.
-- Không chạy lệnh.
+Yêu cầu bắt buộc:
+1. Legal BM25 index phải đọc data/processed/legal_article_chunks.parquet.
+2. Không đọc data/processed/legal_articles.parquet cho BM25 legal retrieval.
+3. Legal BM25 text field chính là chunk_text.
+4. Payload legal BM25 phải giữ chunk_id, article_id, law_id, law_title, article_no, article_title, chunk_index, source_url, domain, status.
+5. Phapdien BM25 phải đọc data/processed/phapdien_articles_index.parquet.
+6. Không đọc phapdien_articles.parquet gốc cho indexing vì file gốc có empty content rows.
+7. Anle BM25 đọc data/processed/anle_units.parquet.
+8. Có recreate flag.
+9. Có max_rows/sample option nếu phù hợp.
+10. Không chạy lệnh.
+
+Không làm:
+- Không thay đổi legal_articles.parquet.
+- Không dùng chunk_id để sinh relevant_docs/relevant_articles.
+- Không triển khai Neo4j.
 
 Acceptance Criteria:
-- Function build_all_bm25_indexes(recreate: bool) tồn tại.
-- Có thể build từng index riêng.
-- Payload giữ canonical article_id với legal_articles.
+- Build được legal_article_chunks_bm25.
+- Build được phapdien_articles_bm25.
+- Build được anle_units_bm25.
+- Legal BM25 source là legal_article_chunks.parquet.
+- Phapdien BM25 source là phapdien_articles_index.parquet.
+- Payload legal BM25 có cả chunk_id và article_id.
 
 Lệnh người dùng tự chạy:
 python - <<'PY'
 from backend.indexing.build_bm25_index import build_all_bm25_indexes
-build_all_bm25_indexes(recreate=True)
-print("bm25 indexes built")
+build_all_bm25_indexes(recreate=True, max_rows=1000)
+print("bm25 smoke indexes built")
 PY
 ```
 
 ---
-
 # P2.T4 — Build vector indexes
 
 ```text
@@ -937,44 +1051,67 @@ Hãy đọc:
 Tạo/sửa:
 - backend/indexing/build_vector_index.py
 
-Input:
-- data/processed/legal_articles.parquet
-- data/processed/phapdien_articles.parquet
+Inputs:
+- data/processed/legal_article_chunks.parquet
+- data/processed/phapdien_articles_index.parquet
 - data/processed/anle_units.parquet
 
 Qdrant collections:
-- legal_articles_dense
+- legal_article_chunks_dense
 - phapdien_articles_dense
 - anle_units_dense
 
-Yêu cầu:
-- Dùng VNLegalLALEmbedder.
-- Text format cho legal article:
-  Tên văn bản: {law_title}
-  Điều: {article_no}
-  Tiêu đề điều: {article_title}
-  Nội dung:
-  {article_text}
-- Payload giữ article_id/phapdien_id/unit_id.
-- Có batching.
-- Có recreate flag.
-- Không chạy lệnh.
+Yêu cầu bắt buộc:
+1. Legal vector index phải đọc data/processed/legal_article_chunks.parquet.
+2. Không đọc data/processed/legal_articles.parquet cho vector legal retrieval.
+3. Legal vector text dùng để embed:
+   Tên văn bản: {law_title}
+   Điều: {article_no}
+   Tiêu đề điều: {article_title}
+   Nội dung chunk:
+   {chunk_text}
+4. Payload legal vector phải giữ chunk_id, article_id, law_id, law_title, article_no, article_title, chunk_index, source_url, domain, status.
+5. Phapdien vector index phải đọc data/processed/phapdien_articles_index.parquet.
+6. Anle vector index đọc data/processed/anle_units.parquet.
+7. Dùng VNLegalLALEmbedder.
+8. Có batching.
+9. Có recreate flag.
+10. Có resume/skip option nếu phù hợp.
+11. Nếu đổi từ article-level sang chunk-level, phải rebuild với recreate=True, resume=False.
+12. Không trộn embedding từ mean pooling và last-token pooling trong cùng collection.
+13. Không chạy lệnh.
+
+Không làm:
+- Không dùng chunk_id làm relevant_docs hoặc relevant_articles.
+- Không triển khai Neo4j.
+- Không thay đổi exact index.
 
 Acceptance Criteria:
-- Function build_all_vector_indexes(recreate: bool) tồn tại.
-- Tạo đúng collection names.
-- Không trộn embedding model khác.
+- Build được legal_article_chunks_dense.
+- Build được phapdien_articles_dense.
+- Build được anle_units_dense.
+- Legal vector source là legal_article_chunks.parquet.
+- Legal vector text dùng chunk_text.
+- Payload legal vector có cả chunk_id và parent article_id.
+- Phapdien vector source là phapdien_articles_index.parquet.
 
 Lệnh người dùng tự chạy:
 python - <<'PY'
+from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
 from backend.indexing.build_vector_index import build_all_vector_indexes
-build_all_vector_indexes(recreate=True)
-print("vector indexes built")
+
+embedder = VNLegalLALEmbedder(device="cuda", batch_size=8, max_length=512)
+build_all_vector_indexes(
+    recreate=True,
+    resume=False,
+    embedder=embedder,
+    max_rows=20,
+)
+print("chunk-level vector smoke test built")
 PY
 ```
 
 ---
-
 # P2.T5 — Build exact index
 
 ```text

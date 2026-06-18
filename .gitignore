@@ -3,6 +3,7 @@ backend/knowledge_data
 .env
 .venv 
 .pytest_cache
+
 # Python cache
 __pycache__/
 *.py[cod]
