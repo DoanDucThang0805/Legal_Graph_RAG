@@ -1,4 +1,4 @@
-"""Thin entrypoint for Phase 5 answer generation."""
+﻿"""Thin entrypoint for Phase 5 answer generation."""
 
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         legal_articles_path=args.legal_articles_path,
         generator=generator,
         limit=args.limit,
+        max_tokens=args.max_tokens,
+        max_article_chars=args.max_article_chars,
+        max_total_context_chars=args.max_total_context_chars,
     )
     logger.info("Summary: %s", summary)
     return 0
@@ -49,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--legal-articles-path", default=str(settings.paths.processed_dir / "legal_articles.parquet"))
     parser.add_argument("--client", choices=["qwen", "vllm"], default="qwen")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--max-article-chars", type=int, default=700)
+    parser.add_argument("--max-total-context-chars", type=int, default=2500)
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -59,6 +65,9 @@ def generate_answers_batch(
     legal_articles_path: str | Path,
     generator: AnswerGenerator,
     limit: int | None = None,
+    max_tokens: int = 128,
+    max_article_chars: int = 700,
+    max_total_context_chars: int = 2500,
 ) -> dict[str, int]:
     source_path = Path(input_path)
     target_path = Path(output_path)
@@ -79,11 +88,24 @@ def generate_answers_batch(
             selected_articles = load_selected_article_contexts(
                 selected_article_ids,
                 legal_articles_path=legal_articles_path,
+                max_article_chars=max_article_chars,
+                max_total_context_chars=max_total_context_chars,
             )
+            total_context_chars = _count_article_text_chars(selected_articles)
+            logger.info(
+                "Generating answer id=%s selected_articles=%d hydrated_articles=%d total_context_chars=%d max_tokens=%d",
+                record.get("id"),
+                len(selected_article_ids),
+                len(selected_articles),
+                total_context_chars,
+                max_tokens,
+            )
+
             answer = generator.generate_answer(
                 question=str(record.get("question", "")),
                 selected_articles=selected_articles,
                 answer_type=str(record.get("answer_type", "general") or "general"),
+                max_tokens=max_tokens,
             )
             answer = postprocess_citations(answer, selected_articles)
 
@@ -131,6 +153,10 @@ def _extract_selected_article_ids(record: dict[str, Any]) -> list[str]:
         elif isinstance(article, dict) and article.get("article_id"):
             article_ids.append(str(article["article_id"]))
     return article_ids
+
+
+def _count_article_text_chars(selected_articles: list[dict[str, Any]]) -> int:
+    return sum(len(str(article.get("article_text") or "")) for article in selected_articles)
 
 
 def _configure_logging(log_level: str) -> None:
