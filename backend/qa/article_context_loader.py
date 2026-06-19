@@ -22,6 +22,7 @@ REQUIRED_ARTICLE_COLUMNS = [
     "article_text",
 ]
 TRUNCATED_SUFFIX = "... [Nội dung điều luật đã được rút gọn để phù hợp giới hạn context]"
+MIN_ARTICLE_CONTEXT_CHARS = 150
 
 
 def load_selected_article_contexts(
@@ -257,27 +258,102 @@ def _truncate_article_texts(
 
     per_article_limit = _normalize_limit(max_article_chars)
     total_limit = _normalize_limit(max_total_context_chars)
-    total_chars = 0
+    article_texts = [str(article.get("article_text") or "") for article in articles]
+
+    if total_limit is None:
+        quotas = [_article_capacity(text, per_article_limit) for text in article_texts]
+    else:
+        quotas = _allocate_article_text_quotas(article_texts, per_article_limit, total_limit)
+
     truncated_articles: list[dict[str, Any]] = []
-
-    for article in articles:
+    for article, quota in zip(articles, quotas):
         article_copy = dict(article)
-        article_text = str(article_copy.get("article_text") or "")
-        allowed_chars = len(article_text)
-
-        if per_article_limit is not None:
-            allowed_chars = min(allowed_chars, per_article_limit)
-
-        if total_limit is not None:
-            remaining_chars = max(total_limit - total_chars, 0)
-            allowed_chars = min(allowed_chars, remaining_chars)
-
-        truncated_text = _truncate_text(article_text, allowed_chars)
-        article_copy["article_text"] = truncated_text
-        total_chars += len(truncated_text)
+        article_copy["article_text"] = _truncate_text(str(article_copy.get("article_text") or ""), quota)
         truncated_articles.append(article_copy)
 
     return truncated_articles
+
+
+def _allocate_article_text_quotas(
+    article_texts: list[str],
+    per_article_limit: int | None,
+    total_limit: int,
+) -> list[int]:
+    capacities = [_article_capacity(text, per_article_limit) for text in article_texts]
+    quotas = [0] * len(article_texts)
+    total_capacity = sum(capacities)
+    remaining_budget = min(total_limit, total_capacity)
+    if remaining_budget <= 0:
+        return quotas
+
+    text_indices = [index for index, capacity in enumerate(capacities) if capacity > 0]
+    if not text_indices:
+        return quotas
+
+    if remaining_budget < len(text_indices):
+        for index in text_indices[:remaining_budget]:
+            quotas[index] = 1
+        return quotas
+
+    for index in text_indices:
+        quotas[index] = 1
+    remaining_budget -= len(text_indices)
+
+    min_article_chars = _minimum_article_quota(per_article_limit)
+    min_targets = {index: min(capacities[index], min_article_chars) for index in text_indices}
+    remaining_budget = _distribute_round_robin(
+        quotas=quotas,
+        targets=min_targets,
+        remaining_budget=remaining_budget,
+    )
+
+    # Sau khi mọi article có phần tối thiểu hợp lý, phần còn lại ưu tiên theo thứ tự selected articles.
+    for index in text_indices:
+        if remaining_budget <= 0:
+            break
+        extra = min(capacities[index] - quotas[index], remaining_budget)
+        if extra <= 0:
+            continue
+        quotas[index] += extra
+        remaining_budget -= extra
+
+    return quotas
+
+
+def _article_capacity(text: str, per_article_limit: int | None) -> int:
+    if not text:
+        return 0
+    if per_article_limit is None:
+        return len(text)
+    return min(len(text), per_article_limit)
+
+
+def _minimum_article_quota(per_article_limit: int | None) -> int:
+    if per_article_limit is None:
+        return MIN_ARTICLE_CONTEXT_CHARS
+    if per_article_limit <= 0:
+        return 0
+    return min(MIN_ARTICLE_CONTEXT_CHARS, per_article_limit)
+
+
+def _distribute_round_robin(
+    quotas: list[int],
+    targets: dict[int, int],
+    remaining_budget: int,
+) -> int:
+    while remaining_budget > 0:
+        progressed = False
+        for index, target in targets.items():
+            if remaining_budget <= 0:
+                break
+            if quotas[index] >= target:
+                continue
+            quotas[index] += 1
+            remaining_budget -= 1
+            progressed = True
+        if not progressed:
+            break
+    return remaining_budget
 
 
 def _normalize_limit(value: int | None) -> int | None:
