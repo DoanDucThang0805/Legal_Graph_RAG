@@ -29,6 +29,7 @@ def load_selected_article_contexts(
     legal_articles_path: str | Path,
     max_article_chars: int | None = None,
     max_total_context_chars: int | None = None,
+    legal_article_chunks_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Hydrate canonical article IDs from legal_articles.parquet.
 
@@ -37,6 +38,8 @@ def load_selected_article_contexts(
         legal_articles_path: Path to the canonical legal_articles parquet file.
         max_article_chars: Optional per-article article_text character limit.
         max_total_context_chars: Optional total article_text character budget.
+        legal_article_chunks_path: Optional path to legal_article_chunks parquet
+            for fallback text when canonical article_text is empty.
 
     Returns:
         Article dictionaries preserving the input order after deduplication.
@@ -68,11 +71,45 @@ def load_selected_article_contexts(
         logger.warning("Missing %d selected article IDs in legal_articles parquet", len(missing_ids))
 
     ordered_articles = [articles_by_id[article_id] for article_id in unique_article_ids if article_id in articles_by_id]
+    ordered_articles = _fill_empty_article_texts_from_chunks(
+        ordered_articles,
+        legal_articles_path=articles_path,
+        legal_article_chunks_path=legal_article_chunks_path,
+        pl=pl,
+    )
     return _truncate_article_texts(
         ordered_articles,
         max_article_chars=max_article_chars,
         max_total_context_chars=max_total_context_chars,
     )
+
+
+class ArticleContextLoader:
+    """Small wrapper for hydrating selected article IDs into QA context."""
+
+    def __init__(
+        self,
+        legal_articles_path: str | Path,
+        legal_article_chunks_path: str | Path | None = None,
+        max_article_chars: int | None = None,
+        max_total_context_chars: int | None = None,
+    ) -> None:
+        self.legal_articles_path = Path(legal_articles_path)
+        self.legal_article_chunks_path = (
+            Path(legal_article_chunks_path) if legal_article_chunks_path is not None else None
+        )
+        self.max_article_chars = max_article_chars
+        self.max_total_context_chars = max_total_context_chars
+
+    def load_articles(self, article_ids: list[str]) -> list[dict[str, Any]]:
+        """Load selected articles using the same behavior as the module function."""
+        return load_selected_article_contexts(
+            article_ids=article_ids,
+            legal_articles_path=self.legal_articles_path,
+            max_article_chars=self.max_article_chars,
+            max_total_context_chars=self.max_total_context_chars,
+            legal_article_chunks_path=self.legal_article_chunks_path,
+        )
 
 
 def _deduplicate_article_ids(article_ids: list[str]) -> list[str]:
@@ -87,6 +124,123 @@ def _deduplicate_article_ids(article_ids: list[str]) -> list[str]:
         unique_article_ids.append(normalized_id)
 
     return unique_article_ids
+
+
+def _fill_empty_article_texts_from_chunks(
+    articles: list[dict[str, Any]],
+    legal_articles_path: Path,
+    legal_article_chunks_path: str | Path | None,
+    pl: Any,
+) -> list[dict[str, Any]]:
+    fallback_ids = [
+        str(article.get("article_id"))
+        for article in articles
+        if article.get("article_id") and not _has_text(article.get("article_text"))
+    ]
+    if not fallback_ids:
+        return articles
+
+    chunks_path = _resolve_chunks_path(legal_articles_path, legal_article_chunks_path)
+    chunk_texts_by_article_id = _load_chunk_texts_by_article_id(
+        chunks_path=chunks_path,
+        article_ids=fallback_ids,
+        pl=pl,
+    )
+    if not chunk_texts_by_article_id:
+        return articles
+
+    hydrated_articles: list[dict[str, Any]] = []
+    filled_count = 0
+    for article in articles:
+        article_copy = dict(article)
+        article_id = str(article_copy.get("article_id") or "")
+        fallback_text = chunk_texts_by_article_id.get(article_id)
+        if fallback_text and not _has_text(article_copy.get("article_text")):
+            article_copy["article_text"] = fallback_text
+            filled_count += 1
+        hydrated_articles.append(article_copy)
+
+    if filled_count:
+        logger.info("Filled empty article_text from chunks for %d selected articles", filled_count)
+    return hydrated_articles
+
+
+def _resolve_chunks_path(
+    legal_articles_path: Path,
+    legal_article_chunks_path: str | Path | None,
+) -> Path:
+    if legal_article_chunks_path is not None:
+        return Path(legal_article_chunks_path)
+    return legal_articles_path.with_name("legal_article_chunks.parquet")
+
+
+def _load_chunk_texts_by_article_id(
+    chunks_path: Path,
+    article_ids: list[str],
+    pl: Any,
+) -> dict[str, str]:
+    if not chunks_path.is_file():
+        logger.warning("legal_article_chunks parquet does not exist: %s", chunks_path)
+        return {}
+
+    chunks_df = pl.read_parquet(chunks_path)
+    if "article_id" not in chunks_df.columns:
+        logger.warning("legal_article_chunks parquet missing article_id column: %s", chunks_path)
+        return {}
+
+    text_column = _find_chunk_text_column(chunks_df.columns)
+    if text_column is None:
+        logger.warning("legal_article_chunks parquet missing text column: %s", chunks_path)
+        return {}
+
+    selected_columns = ["article_id", text_column]
+    order_column = _find_chunk_order_column(chunks_df.columns)
+    if order_column is not None:
+        selected_columns.append(order_column)
+
+    filtered_df = chunks_df.filter(pl.col("article_id").is_in(article_ids)).select(selected_columns)
+    if order_column is not None:
+        filtered_df = filtered_df.sort(["article_id", order_column])
+
+    chunk_texts_by_article_id: dict[str, list[str]] = {}
+    seen_texts_by_article_id: dict[str, set[str]] = {}
+    for row in filtered_df.iter_rows(named=True):
+        article_id = str(row.get("article_id") or "").strip()
+        chunk_text = str(row.get(text_column) or "").strip()
+        if not article_id or not chunk_text:
+            continue
+
+        seen_texts = seen_texts_by_article_id.setdefault(article_id, set())
+        if chunk_text in seen_texts:
+            continue
+
+        # Ghép theo thứ tự chunk ổn định; bỏ duplicate để tránh prompt bị lặp đoạn.
+        seen_texts.add(chunk_text)
+        chunk_texts_by_article_id.setdefault(article_id, []).append(chunk_text)
+
+    return {
+        article_id: "\n\n".join(chunk_texts)
+        for article_id, chunk_texts in chunk_texts_by_article_id.items()
+        if chunk_texts
+    }
+
+
+def _find_chunk_text_column(columns: list[str]) -> str | None:
+    for column in ("chunk_text", "text", "content_text", "article_text"):
+        if column in columns:
+            return column
+    return None
+
+
+def _find_chunk_order_column(columns: list[str]) -> str | None:
+    for column in ("chunk_index", "chunk_no", "chunk_id"):
+        if column in columns:
+            return column
+    return None
+
+
+def _has_text(value: Any) -> bool:
+    return bool(str(value or "").strip())
 
 
 def _truncate_article_texts(
