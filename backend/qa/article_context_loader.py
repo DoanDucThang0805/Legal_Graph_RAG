@@ -31,20 +31,52 @@ def load_selected_article_contexts(
     max_total_context_chars: int | None = None,
     legal_article_chunks_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Hydrate canonical article IDs from legal_articles.parquet.
+    """Backward-compatible helper used by the answer generation script."""
+    loader = ArticleContextLoader(
+        legal_articles_path=legal_articles_path,
+        legal_article_chunks_path=legal_article_chunks_path,
+        max_article_chars=max_article_chars,
+        max_total_context_chars=max_total_context_chars,
+    )
+    return loader.load_articles(article_ids)
 
-    Args:
-        article_ids: Canonical article IDs in retrieval-selected order.
-        legal_articles_path: Path to the canonical legal_articles parquet file.
-        max_article_chars: Optional per-article article_text character limit.
-        max_total_context_chars: Optional total article_text character budget.
-        legal_article_chunks_path: Optional path to legal_article_chunks parquet
-            for fallback text when canonical article_text is empty.
 
-    Returns:
-        Article dictionaries preserving the input order after deduplication.
-    """
+class ArticleContextLoader:
+    """Small wrapper for hydrating selected article IDs into QA context."""
 
+    def __init__(
+        self,
+        legal_articles_path: str | Path,
+        legal_article_chunks_path: str | Path | None = None,
+        max_article_chars: int | None = None,
+        max_total_context_chars: int | None = None,
+    ) -> None:
+        self.legal_articles_path = Path(legal_articles_path)
+        self.legal_article_chunks_path = (
+            Path(legal_article_chunks_path) if legal_article_chunks_path is not None else None
+        )
+        self.max_article_chars = max_article_chars
+        self.max_total_context_chars = max_total_context_chars
+
+    def load_articles(self, article_ids: list[str]) -> list[dict[str, Any]]:
+        """Load selected articles with chunk fallback for empty article_text."""
+        return _load_selected_article_contexts(
+            article_ids=article_ids,
+            legal_articles_path=self.legal_articles_path,
+            max_article_chars=self.max_article_chars,
+            max_total_context_chars=self.max_total_context_chars,
+            legal_article_chunks_path=self.legal_article_chunks_path,
+        )
+
+
+def _load_selected_article_contexts(
+    article_ids: list[str],
+    legal_articles_path: str | Path,
+    max_article_chars: int | None,
+    max_total_context_chars: int | None,
+    legal_article_chunks_path: str | Path | None,
+) -> list[dict[str, Any]]:
+    """Hydrate canonical article IDs from legal_articles.parquet."""
     unique_article_ids = _deduplicate_article_ids(article_ids)
     if not unique_article_ids:
         return []
@@ -82,34 +114,6 @@ def load_selected_article_contexts(
         max_article_chars=max_article_chars,
         max_total_context_chars=max_total_context_chars,
     )
-
-
-class ArticleContextLoader:
-    """Small wrapper for hydrating selected article IDs into QA context."""
-
-    def __init__(
-        self,
-        legal_articles_path: str | Path,
-        legal_article_chunks_path: str | Path | None = None,
-        max_article_chars: int | None = None,
-        max_total_context_chars: int | None = None,
-    ) -> None:
-        self.legal_articles_path = Path(legal_articles_path)
-        self.legal_article_chunks_path = (
-            Path(legal_article_chunks_path) if legal_article_chunks_path is not None else None
-        )
-        self.max_article_chars = max_article_chars
-        self.max_total_context_chars = max_total_context_chars
-
-    def load_articles(self, article_ids: list[str]) -> list[dict[str, Any]]:
-        """Load selected articles using the same behavior as the module function."""
-        return load_selected_article_contexts(
-            article_ids=article_ids,
-            legal_articles_path=self.legal_articles_path,
-            max_article_chars=self.max_article_chars,
-            max_total_context_chars=self.max_total_context_chars,
-            legal_article_chunks_path=self.legal_article_chunks_path,
-        )
 
 
 def _deduplicate_article_ids(article_ids: list[str]) -> list[str]:

@@ -5,7 +5,7 @@ import polars as pl
 from backend.qa.article_context_loader import ArticleContextLoader, load_selected_article_contexts
 
 
-def test_load_selected_article_contexts_falls_back_to_chunk_text(tmp_path: Path) -> None:
+def test_load_selected_article_contexts_falls_back_to_default_chunk_path(tmp_path: Path) -> None:
     legal_articles_path = tmp_path / "legal_articles.parquet"
     legal_chunks_path = tmp_path / "legal_article_chunks.parquet"
     article_a = "L1|Luật Test|Điều 1"
@@ -30,7 +30,6 @@ def test_load_selected_article_contexts_falls_back_to_chunk_text(tmp_path: Path)
     articles = load_selected_article_contexts(
         [article_a, article_b],
         legal_articles_path=legal_articles_path,
-        legal_article_chunks_path=legal_chunks_path,
     )
 
     assert [article["article_id"] for article in articles] == [article_a, article_b]
@@ -72,7 +71,6 @@ def test_chunk_fallback_goes_through_existing_truncation(tmp_path: Path) -> None
         [article_id],
         legal_articles_path=legal_articles_path,
         max_article_chars=40,
-        legal_article_chunks_path=legal_chunks_path,
     )
 
     assert len(articles[0]["article_text"]) == 40
