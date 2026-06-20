@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+MAX_CITATION_GAP_CHARS = 80
+MAX_RAW_CITATION_CHARS = 150
+BLOCK_MARKERS = ("Căn cứ pháp lý:", "Lưu ý")
 ARTICLE_PATTERN = re.compile(r"\b(?:điều|Điều)\s+0*(\d+[a-zA-Z]?)\b", flags=re.IGNORECASE)
 LAW_ID_PATTERN = re.compile(
     r"\b\d{1,3}/\d{4}/(?:QH\d*|NĐ-CP|ND-CP|TT-[A-ZĐ0-9-]+|QD-[A-ZĐ0-9-]+|QĐ-[A-ZĐ0-9-]+)\b",
@@ -15,10 +18,11 @@ LAW_ID_PATTERN = re.compile(
 )
 STRONG_CITATION_PATTERN = re.compile(
     r"(?P<article>(?:điều|Điều)\s+0*(?P<article_no>\d+[a-zA-Z]?))"
-    r"(?P<middle>.{0,120}?)"
+    rf"(?P<middle>[^\n]{{0,{MAX_CITATION_GAP_CHARS}}}?)"
     r"(?P<law_id>\d{1,3}/\d{4}/(?:QH\d*|NĐ-CP|ND-CP|TT-[A-ZĐ0-9-]+|QD-[A-ZĐ0-9-]+|QĐ-[A-ZĐ0-9-]+))",
-    flags=re.IGNORECASE | re.DOTALL,
+    flags=re.IGNORECASE,
 )
+SEGMENT_SPLIT_PATTERN = re.compile(r"[\n\r]+|(?<=[.;!?])\s+|\s+-\s+")
 
 
 @dataclass(frozen=True)
@@ -44,23 +48,27 @@ CitationKey = tuple[str, str]
 
 
 def extract_answer_citations(answer: str) -> list[AnswerCitation]:
-    """Extract strong answer citations that contain both article number and law id."""
+    """Extract short strong answer citations that contain article number and law id."""
     text = str(answer or "")
     citations: list[AnswerCitation] = []
     seen: set[tuple[str, str, str]] = set()
 
-    for match in STRONG_CITATION_PATTERN.finditer(text):
-        article_no = normalize_article_no(match.group("article_no"))
-        law_id = normalize_law_id(match.group("law_id"))
-        if not article_no or not law_id:
-            continue
+    for segment in _iter_citation_segments(text):
+        for match in STRONG_CITATION_PATTERN.finditer(segment):
+            raw_text = _clean_raw_citation(match.group(0))
+            if not _is_valid_raw_citation(raw_text):
+                continue
 
-        raw_text = " ".join(match.group(0).split())
-        key = (article_no.casefold(), law_id.casefold(), raw_text.casefold())
-        if key in seen:
-            continue
-        seen.add(key)
-        citations.append(AnswerCitation(article_no=article_no, law_id=law_id, raw_text=raw_text))
+            article_no = normalize_article_no(match.group("article_no"))
+            law_id = normalize_law_id(match.group("law_id"))
+            if not article_no or not law_id:
+                continue
+
+            key = (article_no.casefold(), law_id.casefold(), raw_text.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append(AnswerCitation(article_no=article_no, law_id=law_id, raw_text=raw_text))
 
     return citations
 
@@ -136,6 +144,31 @@ def format_unsupported_citation(citation: UnsupportedCitation) -> str:
     """Format unsupported citation for CSV reports."""
     law_id = citation.law_id or ""
     return f"{citation.article_no}|{law_id}|{citation.raw_text}"
+
+
+def _iter_citation_segments(text: str) -> list[str]:
+    segments: list[str] = []
+    for line in str(text or "").splitlines():
+        for marker in BLOCK_MARKERS:
+            line = line.replace(marker, f"\n{marker}\n")
+        for part in SEGMENT_SPLIT_PATTERN.split(line):
+            segment = part.strip()
+            if not segment:
+                continue
+            segments.append(segment)
+    return segments
+
+
+def _clean_raw_citation(raw_text: str) -> str:
+    compact = " ".join(str(raw_text or "").split())
+    return compact.strip(" ,.;")
+
+
+def _is_valid_raw_citation(raw_text: str) -> bool:
+    if not raw_text or len(raw_text) > MAX_RAW_CITATION_CHARS:
+        return False
+    lowered = raw_text.casefold()
+    return not any(marker.casefold() in lowered for marker in BLOCK_MARKERS)
 
 
 def _extract_selected_law_and_article(article: Any) -> tuple[str, str]:
