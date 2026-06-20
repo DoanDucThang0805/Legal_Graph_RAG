@@ -1,4 +1,4 @@
-"""Build descriptive error analysis reports for retrieval and QA outputs."""
+﻿"""Build descriptive error analysis reports for retrieval and QA outputs."""
 
 from __future__ import annotations
 
@@ -10,11 +10,18 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from backend.evaluation.unsupported_citations import (
+    UnsupportedCitation,
+    detect_unsupported_citations,
+    format_unsupported_citation,
+)
+
 
 logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_FILENAME = "low_confidence_questions.csv"
 RETRIEVAL_DEBUG_FILENAME = "retrieval_debug_report.csv"
+UNSUPPORTED_CITATIONS_FILENAME = "unsupported_citations_report.csv"
 
 LOW_CANDIDATE_THRESHOLD = 5
 ANSWER_TOO_SHORT_THRESHOLD = 80
@@ -39,7 +46,7 @@ def build_error_analysis_report(
     generated_answers_path: str,
     output_dir: str,
 ) -> dict[str, Any]:
-    """Create low-confidence and retrieval debug CSV reports.
+    """Create low-confidence, retrieval debug, and unsupported citation reports.
 
     This function only analyzes existing JSONL outputs. It does not call
     retrieval, QA generation, submission builders, or any LLM component.
@@ -53,9 +60,11 @@ def build_error_analysis_report(
 
     low_confidence_path = output_path / LOW_CONFIDENCE_FILENAME
     retrieval_debug_path = output_path / RETRIEVAL_DEBUG_FILENAME
+    unsupported_citations_path = output_path / UNSUPPORTED_CITATIONS_FILENAME
 
     low_confidence_rows: list[dict[str, Any]] = []
     debug_rows: list[dict[str, Any]] = []
+    unsupported_citation_rows: list[dict[str, Any]] = []
 
     for record_id in ordered_ids:
         retrieval_record = retrieval_records.get(record_id, {})
@@ -64,6 +73,9 @@ def build_error_analysis_report(
         issue_categories, reasons = _detect_issue_categories(combined)
 
         debug_rows.append(_build_debug_row(combined))
+        unsupported_citations = _safe_list(combined.get("unsupported_citations"))
+        if unsupported_citations:
+            unsupported_citation_rows.append(_build_unsupported_citation_row(combined, unsupported_citations))
         if issue_categories:
             low_confidence_rows.append(
                 _build_low_confidence_row(combined, issue_categories, reasons)
@@ -71,12 +83,15 @@ def build_error_analysis_report(
 
     _write_csv(low_confidence_path, _low_confidence_columns(), low_confidence_rows)
     _write_csv(retrieval_debug_path, _debug_columns(), debug_rows)
+    _write_csv(unsupported_citations_path, _unsupported_citation_columns(), unsupported_citation_rows)
 
     return {
         "total_questions": len(ordered_ids),
         "low_confidence_count": len(low_confidence_rows),
+        "unsupported_citation_count": len(unsupported_citation_rows),
         "low_confidence_path": str(low_confidence_path),
         "retrieval_debug_report_path": str(retrieval_debug_path),
+        "unsupported_citations_report_path": str(unsupported_citations_path),
     }
 
 
@@ -136,14 +151,16 @@ def _combine_records(
     debug = _safe_dict(retrieval_record.get("debug"))
     stage_counts = _safe_dict(debug.get("stage_counts"))
     errors = _safe_dict(debug.get("errors"))
+    answer = _safe_text(answer_record.get("answer"))
 
     return {
         "id": record_id,
         "question": _first_text(retrieval_record.get("question"), answer_record.get("question")),
-        "answer": _safe_text(answer_record.get("answer")),
+        "answer": answer,
         "selected_articles": selected_source,
         "retrieval_selected_articles": retrieval_selected,
         "answer_selected_articles": answer_selected,
+        "unsupported_citations": detect_unsupported_citations(answer, selected_source),
         "candidate_count": _safe_int(retrieval_record.get("candidate_count")),
         "stage_counts": stage_counts,
         "errors": errors,
@@ -201,6 +218,12 @@ def _detect_issue_categories(record: Mapping[str, Any]) -> tuple[list[str], list
     if _has_legacy_or_unknown_law_id(_safe_list(record.get("answer_selected_articles"))):
         add_issue("legacy_or_unknown_law_id", "có selected article thiếu hoặc không rõ law_id")
 
+    if _safe_list(record.get("unsupported_citations")):
+        add_issue(
+            "unsupported_citation_in_answer",
+            "answer viện dẫn điều/văn bản không nằm trong selected_articles",
+        )
+
     return issues, reasons
 
 
@@ -245,6 +268,27 @@ def _build_debug_row(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_unsupported_citation_row(
+    record: Mapping[str, Any],
+    unsupported_citations: list[Any],
+) -> dict[str, Any]:
+    answer = _safe_text(record.get("answer"))
+    selected_articles = _safe_list(record.get("selected_articles"))
+    formatted = [
+        format_unsupported_citation(citation)
+        for citation in unsupported_citations
+        if isinstance(citation, UnsupportedCitation)
+    ]
+    return {
+        "id": record.get("id", ""),
+        "question": _safe_text(record.get("question")),
+        "unsupported_count": len(formatted),
+        "unsupported_citations": ";".join(formatted),
+        "selected_articles_preview": ";".join(_article_ids(selected_articles)[:3]),
+        "answer_preview": _preview(answer, PREVIEW_LENGTH),
+    }
+
+
 def _write_csv(path: Path, columns: list[str], rows: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=columns)
@@ -282,6 +326,17 @@ def _debug_columns() -> list[str]:
         "has_errors",
         "errors",
         "top_selected_articles",
+    ]
+
+
+def _unsupported_citation_columns() -> list[str]:
+    return [
+        "id",
+        "question",
+        "unsupported_count",
+        "unsupported_citations",
+        "selected_articles_preview",
+        "answer_preview",
     ]
 
 

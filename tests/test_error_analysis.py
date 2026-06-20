@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import json
 from pathlib import Path
 
@@ -43,8 +43,8 @@ def test_build_error_analysis_report_creates_csv_outputs(tmp_path: Path) -> None
             },
             {
                 "id": 2,
-                "question": "Câu hỏi không có lỗi rõ ràng",
-                "selected_articles": ["article-2", "article-3", "article-4"],
+                "question": "Câu hỏi có citation không được hỗ trợ",
+                "selected_articles": ["65/2023/NĐ-CP|Nghị định 65/2023/NĐ-CP|Điều 31"],
                 "candidate_count": 8,
                 "debug": {
                     "stage_counts": {
@@ -53,7 +53,7 @@ def test_build_error_analysis_report_creates_csv_outputs(tmp_path: Path) -> None
                         "exact": 1,
                         "phapdien_mapped": 0,
                         "fused_candidates": 8,
-                        "selected_candidates": 3,
+                        "selected_candidates": 1,
                     },
                     "errors": {},
                 },
@@ -82,24 +82,15 @@ def test_build_error_analysis_report_creates_csv_outputs(tmp_path: Path) -> None
             },
             {
                 "id": 2,
-                "question": "Câu hỏi không có lỗi rõ ràng",
-                "answer": "Đây là câu trả lời có độ dài đủ lớn, nêu căn cứ pháp lý và kết luận sơ bộ cho câu hỏi.",
+                "question": "Câu hỏi có citation không được hỗ trợ",
+                "answer": "Theo Điều 27, Nghị định 65/2023/NĐ-CP thì doanh nghiệp phải thực hiện nghĩa vụ liên quan.",
                 "selected_articles": [
                     {
-                        "article_id": "article-2",
-                        "law_id": "01/2020/QH14",
+                        "article_id": "65/2023/NĐ-CP|Nghị định 65/2023/NĐ-CP|Điều 31",
+                        "law_id": "65/2023/NĐ-CP",
+                        "article_no": "Điều 31",
                         "article_text": "Nội dung điều luật.",
-                    },
-                    {
-                        "article_id": "article-3",
-                        "law_id": "01/2020/QH14",
-                        "article_text": "Nội dung điều luật.",
-                    },
-                    {
-                        "article_id": "article-4",
-                        "law_id": "01/2020/QH14",
-                        "article_text": "Nội dung điều luật.",
-                    },
+                    }
                 ],
             },
         ],
@@ -112,21 +103,31 @@ def test_build_error_analysis_report_creates_csv_outputs(tmp_path: Path) -> None
     )
 
     assert summary["total_questions"] == 3
-    assert summary["low_confidence_count"] >= 2
+    assert summary["low_confidence_count"] >= 3
+    assert "unsupported_citations_report_path" in summary
 
     low_confidence_path = output_dir / "low_confidence_questions.csv"
     debug_report_path = output_dir / "retrieval_debug_report.csv"
+    unsupported_report_path = output_dir / "unsupported_citations_report.csv"
     assert low_confidence_path.exists()
     assert debug_report_path.exists()
+    assert unsupported_report_path.exists()
 
     low_confidence_rows = _read_csv(low_confidence_path)
     debug_rows = _read_csv(debug_report_path)
+    unsupported_rows = _read_csv(unsupported_report_path)
 
     assert len(debug_rows) == 3
     first_issue_categories = low_confidence_rows[0]["issue_categories"]
     assert "answer_maybe_truncated" in first_issue_categories
     assert "empty_article_text" in first_issue_categories
     assert "retrieval_stage_error" in first_issue_categories
+
+    issue_categories = ";".join(row["issue_categories"] for row in low_confidence_rows)
+    assert "unsupported_citation_in_answer" in issue_categories
+    assert len(unsupported_rows) == 1
+    assert unsupported_rows[0]["id"] == "2"
+    assert "Điều 27|65/2023/NĐ-CP" in unsupported_rows[0]["unsupported_citations"]
 
 
 def test_build_error_analysis_report_includes_answer_only_ids(tmp_path: Path) -> None:
@@ -151,4 +152,6 @@ def test_build_error_analysis_report_includes_answer_only_ids(tmp_path: Path) ->
     debug_rows = _read_csv(output_dir / "retrieval_debug_report.csv")
 
     assert summary["total_questions"] == 1
+    assert "unsupported_citations_report_path" in summary
+    assert (output_dir / "unsupported_citations_report.csv").exists()
     assert debug_rows[0]["id"] == "answer-only"
