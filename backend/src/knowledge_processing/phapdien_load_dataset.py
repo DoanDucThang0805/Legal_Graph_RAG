@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
@@ -112,11 +113,8 @@ class PhapdienConfig:
     """
 
     dataset_name: str = "tmquan/phapdien-moj-gov-vn"
-    output_dir: str = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..",
-        "knowlegde_data",
-        "phapdien",
+    output_dir: str = str(
+        Path(__file__).resolve().parents[2] / "knowlegde_data" / "phapdien"
     )
     output_formats: tuple[OutputFormat, ...] = (
         OutputFormat.JSONL,
@@ -327,13 +325,23 @@ class PhapdienDataFormatter:
 
     @staticmethod
     def _serialize_source_links(value: Any) -> str:
-        """list[dict] | None | NaN → JSON string."""
+        """list[dict] | numpy.ndarray | None | NaN → JSON string.
+
+        Note: HuggingFace ``.to_pandas()`` converts ``list`` columns to
+        ``numpy.ndarray``, so we must handle both types.
+        """
         if value is None or (isinstance(value, float)):
             return "[]"
+        # numpy.ndarray → convert to list first
+        items: list | None = None
         if isinstance(value, list):
+            items = value
+        elif hasattr(value, "tolist"):  # numpy.ndarray
+            items = value.tolist()
+        if items is not None:
             cleaned = [
                 {"text": str(item.get("text", "")), "href": str(item.get("href", ""))}
-                for item in value
+                for item in items
                 if isinstance(item, dict)
             ]
             return json.dumps(cleaned, ensure_ascii=False)

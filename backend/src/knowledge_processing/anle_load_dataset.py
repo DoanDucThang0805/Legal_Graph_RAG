@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional
@@ -107,11 +108,8 @@ class AnleConfig:
     """
 
     dataset_name: str = "tmquan/anle-toaan-gov-vn"
-    output_dir: str = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..",
-        "knowlegde_data",
-        "anle",
+    output_dir: str = str(
+        Path(__file__).resolve().parents[2] / "knowlegde_data" / "anle"
     )
     output_formats: tuple[OutputFormat, ...] = (
         OutputFormat.JSONL,
