@@ -92,11 +92,8 @@ def test_does_not_join_article_to_law_id_across_legal_basis_block() -> None:
     selected_articles = [{"law_id": "80/2021/NĐ-CP", "article_no": "Điều 4"}]
     answer = (
         "Theo Điều 16, hộ kinh doanh cần đáp ứng điều kiện. "
-        "Lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp.
-
-"
-        "Căn cứ pháp lý:
-- Điều 4 - 80/2021/NĐ-CP"
+        "L?u ? ??y l? th?ng tin tham kh?o d?a tr?n c?n c? ???c cung c?p.\n\n"
+        "C?n c? ph?p l?:\n- ?i?u 4 - 80/2021/N?-CP"
     )
 
     citations = extract_answer_citations(answer)
@@ -174,7 +171,7 @@ def test_unsupported_full_four_digit_decision_id_keeps_leading_digit() -> None:
     assert len(unsupported) == 1
     assert unsupported[0].article_no == "Điều 6"
     assert unsupported[0].law_id == "1727/2007/QĐ-UBND"
-    assert "727/2007/QĐ-UBND" not in unsupported[0].law_id
+    assert unsupported[0].law_id.startswith("1727/")
 
 
 def test_decision_id_4688_qd_ubnd_is_supported() -> None:

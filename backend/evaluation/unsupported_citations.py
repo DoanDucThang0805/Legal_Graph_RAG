@@ -11,13 +11,16 @@ from typing import Any
 MAX_CITATION_GAP_CHARS = 80
 MAX_RAW_CITATION_CHARS = 150
 BLOCK_MARKERS = ("Căn cứ pháp lý:", "Lưu ý")
-ARTICLE_PATTERN = re.compile(r"\b(?:điều|Điều)\s+0*(\d+[a-zA-Z]?)(?!/)\b", flags=re.IGNORECASE)
+ARTICLE_PATTERN = re.compile(
+    r"\b(?:điều|Điều)\s+0*(\d+[a-zA-Z]?)(?=\s|[,.;:)\]]|$)",
+    flags=re.IGNORECASE,
+)
 LAW_ID_PATTERN = re.compile(
     r"\b\d{1,4}/\d{4}/(?:QH\d*|NĐ-CP|ND-CP|TT-[A-ZĐ0-9-]+|QD-[A-ZĐ0-9-]+|QĐ-[A-ZĐ0-9-]+)\b",
     flags=re.IGNORECASE,
 )
 STRONG_CITATION_PATTERN = re.compile(
-    r"(?P<article>(?:điều|Điều)\s+0*(?P<article_no>\d+[a-zA-Z]?)(?!/))"
+    r"(?P<article>(?:điều|Điều)\s+0*(?P<article_no>\d+[a-zA-Z]?)(?=\s|[,.;:)\]]|$))"
     rf"(?P<middle>[^\n]{{0,{MAX_CITATION_GAP_CHARS}}}?)"
     r"(?P<law_id>\d{1,4}/\d{4}/(?:QH\d*|NĐ-CP|ND-CP|TT-[A-ZĐ0-9-]+|QD-[A-ZĐ0-9-]+|QĐ-[A-ZĐ0-9-]+))",
     flags=re.IGNORECASE,
@@ -150,9 +153,7 @@ def _iter_citation_segments(text: str) -> list[str]:
     segments: list[str] = []
     for line in str(text or "").splitlines():
         for marker in BLOCK_MARKERS:
-            line = line.replace(marker, f"
-{marker}
-")
+            line = line.replace(marker, f"\n{marker}\n")
         for part in SEGMENT_SPLIT_PATTERN.split(line):
             segment = part.strip()
             if not segment:
