@@ -1,129 +1,129 @@
-﻿# Legal Graph RAG â€” Phase & Task Plan v3.1
+# Legal Graph RAG — Phase & Task Plan v3.1
 
-> File liÃªn quan trá»±c tiáº¿p: `codex_task_prompts_vi_v3.md`  
-> Báº£n cáº­p nháº­t: Phase 2 dÃ¹ng `legal_article_chunks.parquet` cho BM25/vector; Neo4j á»Ÿ Phase 8.  
-> CÃ¡ch dÃ¹ng: má»Ÿ file prompt, chá»n Ä‘Ãºng `Task ID` tÆ°Æ¡ng á»©ng trong plan nÃ y, copy prompt cho Codex.  
-> Quy táº¯c váº­n hÃ nh: **Codex chá»‰ sá»­a code vÃ  Ä‘á» xuáº¥t lá»‡nh kiá»ƒm thá»­; ngÆ°á»i dÃ¹ng lÃ  ngÆ°á»i cháº¡y lá»‡nh.**
+> File liên quan trực tiếp: `codex_task_prompts_vi_v3.md`  
+> Bản cập nhật: Phase 2 dùng `legal_article_chunks.parquet` cho BM25/vector; Neo4j ở Phase 8.  
+> Cách dùng: mở file prompt, chọn đúng `Task ID` tương ứng trong plan này, copy prompt cho Codex.  
+> Quy tắc vận hành: **Codex chỉ sửa code và đề xuất lệnh kiểm thử; người dùng là người chạy lệnh.**
 
 ---
 
-## 0. NguyÃªn táº¯c kiá»ƒm soÃ¡t Codex
+## 0. Nguyên tắc kiểm soát Codex
 
-### 0.1. Quy táº¯c báº¯t buá»™c
+### 0.1. Quy tắc bắt buộc
 
-1. Codex pháº£i Ä‘á»c `context.md`, `legal_rag_phase_plan_v3.md` vÃ  cÃ¡c skill liÃªn quan trÆ°á»›c khi code.
-2. Codex chá»‰ Ä‘Æ°á»£c triá»ƒn khai Ä‘Ãºng `Task ID` Ä‘Æ°á»£c giao.
-3. Codex khÃ´ng Ä‘Æ°á»£c tá»± má»Ÿ rá»™ng sang phase/task khÃ¡c.
-4. Codex khÃ´ng Ä‘Æ°á»£c cháº¡y lá»‡nh build/test/index/generate trÃªn mÃ¡y ngÆ°á»i dÃ¹ng.
-5. Codex pháº£i liá»‡t kÃª rÃµ cÃ¡c lá»‡nh Ä‘á»ƒ **ngÆ°á»i dÃ¹ng tá»± cháº¡y**.
-6. Má»—i task pháº£i cÃ³:
+1. Codex phải đọc `context.md`, `legal_rag_phase_plan_v3.md` và các skill liên quan trước khi code.
+2. Codex chỉ được triển khai đúng `Task ID` được giao.
+3. Codex không được tự mở rộng sang phase/task khác.
+4. Codex không được chạy lệnh build/test/index/generate trên máy người dùng.
+5. Codex phải liệt kê rõ các lệnh để **người dùng tự chạy**.
+6. Mỗi task phải có:
    - Deliverables
    - Acceptance Criteria
    - Test/Validation Commands
    - Expected Outputs
-   - Rollback/Debug note náº¿u phÃ¹ há»£p
-7. Scripts chá»‰ lÃ  entrypoint má»ng; business logic pháº£i náº±m trong `backend/`.
-8. KhÃ´ng hard-code path; dÃ¹ng config.
-9. LLM khÃ´ng Ä‘Æ°á»£c tá»± sinh `relevant_docs` hoáº·c `relevant_articles`.
-10. `relevant_docs` vÃ  `relevant_articles` chá»‰ Ä‘Æ°á»£c sinh tá»« canonical `legal_articles.parquet`.
+   - Rollback/Debug note nếu phù hợp
+7. Scripts chỉ là entrypoint mỏng; business logic phải nằm trong `backend/`.
+8. Không hard-code path; dùng config.
+9. LLM không được tự sinh `relevant_docs` hoặc `relevant_articles`.
+10. `relevant_docs` và `relevant_articles` chỉ được sinh từ canonical `legal_articles.parquet`.
 
-### 0.2. Cáº¥u trÃºc lÃ m viá»‡c vá»›i Codex
+### 0.2. Cấu trúc làm việc với Codex
 
-Vá»›i má»—i task:
+Với mỗi task:
 
 ```text
-1. NgÆ°á»i dÃ¹ng chá»n Task ID trong plan.
-2. NgÆ°á»i dÃ¹ng copy prompt tÆ°Æ¡ng á»©ng tá»« codex_task_prompts_vi_v3.md.
-3. Codex sá»­a/táº¡o code.
-4. Codex tráº£ láº¡i:
-   - File Ä‘Ã£ thay Ä‘á»•i
-   - TÃ³m táº¯t thay Ä‘á»•i
-   - Lá»‡nh ngÆ°á»i dÃ¹ng cáº§n cháº¡y
+1. Người dùng chọn Task ID trong plan.
+2. Người dùng copy prompt tương ứng từ codex_task_prompts_vi_v3.md.
+3. Codex sửa/tạo code.
+4. Codex trả lại:
+   - File đã thay đổi
+   - Tóm tắt thay đổi
+   - Lệnh người dùng cần chạy
    - Acceptance Criteria checklist
-5. NgÆ°á»i dÃ¹ng tá»± cháº¡y lá»‡nh.
-6. Náº¿u lá»—i, dÃ¹ng prompt "FIX.TASK" trong codex_task_prompts_vi_v3.md.
+5. Người dùng tự chạy lệnh.
+6. Nếu lỗi, dùng prompt "FIX.TASK" trong codex_task_prompts_vi_v3.md.
 ```
 
-### 0.3. Quy trÃ¬nh bÃ¡o cÃ¡o báº¯t buá»™c trÆ°á»›c/sau khi sá»­a code
+### 0.3. Quy trình báo cáo bắt buộc trước/sau khi sửa code
 
-## Quy trÃ¬nh bÃ¡o cÃ¡o báº¯t buá»™c trÆ°á»›c/sau khi sá»­a code
+## Quy trình báo cáo bắt buộc trước/sau khi sửa code
 
-### TrÆ°á»›c khi sá»­a code
+### Trước khi sửa code
 
-TrÆ°á»›c khi sá»­a báº¥t ká»³ file nÃ o, Codex pháº£i trÃ¬nh bÃ y ngáº¯n gá»n:
+Trước khi sửa bất kỳ file nào, Codex phải trình bày ngắn gọn:
 
 ```text
-Scope báº¡n hiá»ƒu:
+Scope bạn hiểu:
 - ...
 
-Files dá»± kiáº¿n sá»­a:
+Files dự kiến sửa:
 - ...
 
-Test command sáº½ cháº¡y / Ä‘á» xuáº¥t ngÆ°á»i dÃ¹ng cháº¡y:
+Test command sẽ chạy / đề xuất người dùng chạy:
 - ...
 ```
 
-Sau khi trÃ¬nh bÃ y pháº§n nÃ y, Codex pháº£i **dá»«ng láº¡i vÃ  chá» ngÆ°á»i dÃ¹ng xÃ¡c nháº­n** trÆ°á»›c khi sá»­a code, trá»« khi ngÆ°á»i dÃ¹ng Ä‘Ã£ ghi rÃµ: `triá»ƒn khai luÃ´n`.
+Sau khi trình bày phần này, Codex phải **dừng lại và chờ người dùng xác nhận** trước khi sửa code, trừ khi người dùng đã ghi rõ: `triển khai luôn`.
 
-### Sau khi hoÃ n thÃ nh
+### Sau khi hoàn thành
 
-Sau khi sá»­a code xong, Codex pháº£i bÃ¡o cÃ¡o:
+Sau khi sửa code xong, Codex phải báo cáo:
 
 ```text
 Files changed:
 - ...
 
-Logic thay Ä‘á»•i:
+Logic thay đổi:
 - ...
 
-Acceptance Criteria Ä‘Ã£ Ä‘áº¡t/chÆ°a Ä‘áº¡t:
+Acceptance Criteria đã đạt/chưa đạt:
 - [x] ...
 - [ ] ...
 
 Test result:
-- TÃ´i khÃ´ng tá»± cháº¡y lá»‡nh. NgÆ°á»i dÃ¹ng cáº§n cháº¡y:
+- Tôi không tự chạy lệnh. Người dùng cần chạy:
   ...
-- Náº¿u ngÆ°á»i dÃ¹ng Ä‘Ã£ cung cáº¥p log test, tÃ³m táº¯t káº¿t quáº£ táº¡i Ä‘Ã¢y.
+- Nếu người dùng đã cung cấp log test, tóm tắt kết quả tại đây.
 
-Risk cÃ²n láº¡i:
+Risk còn lại:
 - ...
 ```
 
-Quy táº¯c quan trá»ng: **Codex khÃ´ng tá»± cháº¡y lá»‡nh thay ngÆ°á»i dÃ¹ng**. Codex chá»‰ Ä‘á» xuáº¥t lá»‡nh kiá»ƒm thá»­/validation Ä‘á»ƒ ngÆ°á»i dÃ¹ng tá»± cháº¡y.
+Quy tắc quan trọng: **Codex không tự chạy lệnh thay người dùng**. Codex chỉ đề xuất lệnh kiểm thử/validation để người dùng tự chạy.
 
 ---
 
-## 1. Pipeline tá»•ng thá»ƒ
+## 1. Pipeline tổng thể
 
 ```text
 R2AIStage1DATA.json
-â†“
+↓
 Phase 1: Data loading + canonical corpus
-â†“
+↓
 Phase 2: Indexing
   - OpenSearch / BM25
   - Qdrant / dense vector
   - Exact index
-â†“
+↓
 Phase 3: Query analysis
-â†“
+↓
 Phase 4: Hybrid retrieval baseline
-â†“
+↓
 Phase 5: QA generation + submission
-â†“
+↓
 Phase 6: Evaluation + error analysis
-â†“
+↓
 Phase 7: Reranker / LLM verifier
-â†“
+↓
 Phase 8: Neo4j graph expansion
-â†“
+↓
 Phase 9: Fine-tuning preparation
 ```
 
-Baseline cáº§n hoÃ n thÃ nh trÆ°á»›c:
+Baseline cần hoàn thành trước:
 
 ```text
-Phase 0 â†’ Phase 1 â†’ Phase 2 â†’ Phase 3 â†’ Phase 4 â†’ Phase 5
+Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
 ```
 
 ---
@@ -146,9 +146,9 @@ ruff
 ### 2.2. Search / Retrieval
 
 ```text
-OpenSearch hoáº·c Elasticsearch: BM25 / exact phrase search
+OpenSearch hoặc Elasticsearch: BM25 / exact phrase search
 Qdrant: dense vector search
-Neo4j: graph expansion tá»« Phase 8
+Neo4j: graph expansion từ Phase 8
 ```
 
 ### 2.3. Models
@@ -158,67 +158,67 @@ Embedding:
 - darklethelong/vnlegal-lal
 
 Generator:
-- Qwen3-8B qua vLLM hoáº·c Ollama
+- Qwen3-8B qua vLLM hoặc Ollama
 - Qwen2.5-7B-Instruct fallback
 
 Reranker:
-- chá»‰ thÃªm tá»« Phase 7
+- chỉ thêm từ Phase 7
 ```
 
 ---
 
-## 3. CÃ¢y thÆ° má»¥c má»¥c tiÃªu
+## 3. Cây thư mục mục tiêu
 
 ```text
 Legal_Graph_RAG/
-â”œâ”€â”€ context.md
-â”œâ”€â”€ legal_rag_phase_plan_v3.md
-â”œâ”€â”€ codex_task_prompts_vi_v3.md
-â”œâ”€â”€ skills/
-â”‚
-â”œâ”€â”€ backend/
-â”‚   â”œâ”€â”€ __init__.py
-â”‚   â”œâ”€â”€ config/
-â”‚   â”œâ”€â”€ infrastructure/
-â”‚   â”œâ”€â”€ schema/
-â”‚   â”œâ”€â”€ knowledge_processing/
-â”‚   â”œâ”€â”€ indexing/
-â”‚   â”œâ”€â”€ query_analysis/
-â”‚   â”œâ”€â”€ retrieval/
-â”‚   â”œâ”€â”€ qa/
-â”‚   â”œâ”€â”€ prompts/
-â”‚   â”œâ”€â”€ evaluation/
-â”‚   â””â”€â”€ submission/
-â”‚
-â”œâ”€â”€ data/
-â”‚   â”œâ”€â”€ raw/
-â”‚   â”‚   â””â”€â”€ R2AIStage1DATA.json
-â”‚   â”œâ”€â”€ processed/
-â”‚   â””â”€â”€ outputs/
-â”‚
-â”œâ”€â”€ scripts/
-â”œâ”€â”€ tests/
-â”œâ”€â”€ notebooks/
-â”œâ”€â”€ docker-compose.yml
-â”œâ”€â”€ requirements.txt
-â”œâ”€â”€ .env.example
-â”œâ”€â”€ .gitignore
-â””â”€â”€ README.md
+├── context.md
+├── legal_rag_phase_plan_v3.md
+├── codex_task_prompts_vi_v3.md
+├── skills/
+│
+├── backend/
+│   ├── __init__.py
+│   ├── config/
+│   ├── infrastructure/
+│   ├── schema/
+│   ├── knowledge_processing/
+│   ├── indexing/
+│   ├── query_analysis/
+│   ├── retrieval/
+│   ├── qa/
+│   ├── prompts/
+│   ├── evaluation/
+│   └── submission/
+│
+├── data/
+│   ├── raw/
+│   │   └── R2AIStage1DATA.json
+│   ├── processed/
+│   └── outputs/
+│
+├── scripts/
+├── tests/
+├── notebooks/
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example
+├── .gitignore
+└── README.md
 ```
 
 ---
 
-# Phase 0 â€” Project Setup
+# Phase 0 — Project Setup
 
-## P0.T1 â€” Táº¡o skeleton project
+## P0.T1 — Tạo skeleton project
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o cÃ¢y thÆ° má»¥c vÃ  package structure ban Ä‘áº§u.
+Tạo cây thư mục và package structure ban đầu.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P0.T1` trong `codex_task_prompts_vi_v3.md`.
+Dùng prompt: `P0.T1` trong `codex_task_prompts_vi_v3.md`.
 
 ### Deliverables
 
@@ -244,10 +244,10 @@ tests/
 ### Acceptance Criteria
 
 ```text
-[x] Táº¥t cáº£ folder má»¥c tiÃªu tá»“n táº¡i.
-[x] CÃ¡c Python package cÃ³ __init__.py.
-[x] KhÃ´ng táº¡o business logic á»Ÿ task nÃ y.
-[x] KhÃ´ng xÃ³a file hiá»‡n cÃ³ náº¿u khÃ´ng cáº§n thiáº¿t.
+[x] Tất cả folder mục tiêu tồn tại.
+[x] Các Python package có __init__.py.
+[x] Không tạo business logic ở task này.
+[x] Không xóa file hiện có nếu không cần thiết.
 ```
 
 ### User-run commands
@@ -265,15 +265,15 @@ backend import ok
 
 ---
 
-## P0.T2 â€” Config vÃ  settings
+## P0.T2 — Config và settings
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o config dÃ¹ng chung cho path, model vÃ  retrieval.
+Tạo config dùng chung cho path, model và retrieval.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P0.T2`.
+Dùng prompt: `P0.T2`.
 
 ### Deliverables
 
@@ -288,11 +288,11 @@ backend/config/model_config.yaml
 ### Acceptance Criteria
 
 ```text
-[x] Config Ä‘á»c Ä‘Æ°á»£c tá»« YAML.
-[x] CÃ³ default path cho raw/processed/output.
-[x] CÃ³ default model names.
-[x] KhÃ´ng hard-code path trong business logic.
-[x] CÃ³ .env.example nhÆ°ng khÃ´ng commit secret.
+[x] Config đọc được từ YAML.
+[x] Có default path cho raw/processed/output.
+[x] Có default model names.
+[x] Không hard-code path trong business logic.
+[x] Có .env.example nhưng không commit secret.
 ```
 
 ### User-run commands
@@ -308,20 +308,20 @@ PY
 ### Expected result
 
 ```text
-In ra settings object hoáº·c dict config há»£p lá»‡, khÃ´ng lá»—i import.
+In ra settings object hoặc dict config hợp lệ, không lỗi import.
 ```
 
 ---
 
-## P0.T3 â€” Docker compose baseline
+## P0.T3 — Docker compose baseline
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o Docker services cáº§n cho Phase 2 trá»Ÿ Ä‘i.
+Tạo Docker services cần cho Phase 2 trở đi.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P0.T3`.
+Dùng prompt: `P0.T3`.
 
 ### Deliverables
 
@@ -341,11 +341,11 @@ postgres optional
 ### Acceptance Criteria
 
 ```text
-[ ] docker-compose.yml cÃ³ qdrant.
-[ ] docker-compose.yml cÃ³ opensearch.
-[ ] docker-compose.yml cÃ³ neo4j nhÆ°ng Phase 1 chÆ°a cáº§n dÃ¹ng.
-[ ] CÃ³ volume persistent cho service cáº§n thiáº¿t.
-[ ] CÃ³ env sample rÃµ rÃ ng.
+[ ] docker-compose.yml có qdrant.
+[ ] docker-compose.yml có opensearch.
+[ ] docker-compose.yml có neo4j nhưng Phase 1 chưa cần dùng.
+[ ] Có volume persistent cho service cần thiết.
+[ ] Có env sample rõ ràng.
 ```
 
 ### User-run commands
@@ -359,15 +359,15 @@ docker compose ps
 ### Expected result
 
 ```text
-Docker compose config há»£p lá»‡.
-qdrant vÃ  opensearch á»Ÿ tráº¡ng thÃ¡i running/healthy hoáº·c Ã­t nháº¥t started.
+Docker compose config hợp lệ.
+qdrant và opensearch ở trạng thái running/healthy hoặc ít nhất started.
 ```
 
 ---
 
-# Phase 1 â€” Data Loading + Canonical Corpus
+# Phase 1 — Data Loading + Canonical Corpus
 
-## Output chung cá»§a Phase 1
+## Output chung của Phase 1
 
 ```text
 data/processed/test_questions.parquet
@@ -380,15 +380,15 @@ data/processed/phapdien_to_vbpl_map.parquet
 
 ---
 
-## P1.T1 â€” Schema Pydantic
+## P1.T1 — Schema Pydantic
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o schema ná»™i bá»™ cho toÃ n pipeline.
+Tạo schema nội bộ cho toàn pipeline.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T1`.
+Dùng prompt: `P1.T1`.
 
 ### Deliverables
 
@@ -405,13 +405,13 @@ backend/schema/submission.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ TestQuestion schema.
-[ ] CÃ³ LegalDocument schema.
-[ ] CÃ³ LegalArticle schema.
-[ ] LegalArticle cÃ³ relevant_article_string property.
-[ ] LegalArticle cÃ³ relevant_doc_string property.
-[ ] CÃ³ schema cho submission item.
-[ ] Pydantic validation cháº¡y Ä‘Æ°á»£c.
+[ ] Có TestQuestion schema.
+[ ] Có LegalDocument schema.
+[ ] Có LegalArticle schema.
+[ ] LegalArticle có relevant_article_string property.
+[ ] LegalArticle có relevant_doc_string property.
+[ ] Có schema cho submission item.
+[ ] Pydantic validation chạy được.
 ```
 
 ### User-run commands
@@ -421,11 +421,11 @@ python - <<'PY'
 from backend.schema.legal_article import LegalArticle
 
 a = LegalArticle(
-    article_id="04/2017/QH14|Luáº­t 04/2017/QH14 Luáº­t Há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a|Äiá»u 4",
+    article_id="04/2017/QH14|Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa|Điều 4",
     law_id="04/2017/QH14",
-    law_title="Luáº­t 04/2017/QH14 Luáº­t Há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a",
-    article_no="Äiá»u 4",
-    article_text="Ná»™i dung Ä‘iá»u luáº­t..."
+    law_title="Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa",
+    article_no="Điều 4",
+    article_text="Nội dung điều luật..."
 )
 print(a.relevant_article_string)
 print(a.relevant_doc_string)
@@ -435,21 +435,21 @@ PY
 ### Expected result
 
 ```text
-04/2017/QH14|Luáº­t 04/2017/QH14 Luáº­t Há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a|Äiá»u 4
-04/2017/QH14|Luáº­t 04/2017/QH14 Luáº­t Há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a
+04/2017/QH14|Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa|Điều 4
+04/2017/QH14|Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa
 ```
 
 ---
 
-## P1.T2 â€” Text normalization
+## P1.T2 — Text normalization
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o utilities chuáº©n hÃ³a text phÃ¡p luáº­t tiáº¿ng Viá»‡t.
+Tạo utilities chuẩn hóa text pháp luật tiếng Việt.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T2`.
+Dùng prompt: `P1.T2`.
 
 ### Deliverables
 
@@ -472,12 +472,12 @@ normalize_law_title(law_type: str | None, law_id: str | None, title: str | None)
 
 ```text
 [ ] Unicode NFC.
-[ ] NBSP Ä‘Æ°á»£c thay báº±ng space thÆ°á»ng.
-[ ] Gá»™p khoáº£ng tráº¯ng láº·p.
-[ ] "Äiá»u 04." -> "Äiá»u 4".
-[ ] "Ä‘iá»u 7a" -> "Äiá»u 7a".
-[ ] Function xá»­ lÃ½ None an toÃ n.
-[ ] CÃ³ pytest cho normalization.
+[ ] NBSP được thay bằng space thường.
+[ ] Gộp khoảng trắng lặp.
+[ ] "Điều 04." -> "Điều 4".
+[ ] "điều 7a" -> "Điều 7a".
+[ ] Function xử lý None an toàn.
+[ ] Có pytest cho normalization.
 ```
 
 ### User-run commands
@@ -486,29 +486,29 @@ normalize_law_title(law_type: str | None, law_id: str | None, title: str | None)
 pytest tests/test_normalize_text.py -q
 python - <<'PY'
 from backend.knowledge_processing.normalize_text import normalize_article_no
-print(normalize_article_no("Äiá»u 04."))
-print(normalize_article_no("Ä‘iá»u 7a"))
+print(normalize_article_no("Điều 04."))
+print(normalize_article_no("điều 7a"))
 PY
 ```
 
 ### Expected result
 
 ```text
-Äiá»u 4
-Äiá»u 7a
+Điều 4
+Điều 7a
 ```
 
 ---
 
-## P1.T3 â€” Hugging Face generic loader
+## P1.T3 — Hugging Face generic loader
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o helper chung Ä‘á»ƒ load HF datasets sang Polars.
+Tạo helper chung để load HF datasets sang Polars.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T3`.
+Dùng prompt: `P1.T3`.
 
 ### Deliverables
 
@@ -519,11 +519,11 @@ backend/knowledge_processing/hf_loader.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ function load_hf_dataset_to_polars().
+[ ] Có function load_hf_dataset_to_polars().
 [ ] Support dataset_name, config_name, split.
 [ ] Return Polars DataFrame.
-[ ] CÃ³ save_parquet() helper.
-[ ] KhÃ´ng gá»i loader trong import-time.
+[ ] Có save_parquet() helper.
+[ ] Không gọi loader trong import-time.
 ```
 
 ### User-run commands
@@ -540,20 +540,20 @@ PY
 ### Expected result
 
 ```text
-In ra shape vÃ  columns cá»§a dataset phapdien.
+In ra shape và columns của dataset phapdien.
 ```
 
 ---
 
-## P1.T4 â€” Load testset
+## P1.T4 — Load testset
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Load file `R2AIStage1DATA.json` thÃ nh parquet.
+Load file `R2AIStage1DATA.json` thành parquet.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T4`.
+Dùng prompt: `P1.T4`.
 
 ### Deliverables
 
@@ -566,12 +566,12 @@ tests/test_load_testset.py
 ### Acceptance Criteria
 
 ```text
-[ ] Validate JSON lÃ  list.
-[ ] Má»—i item cÃ³ id vÃ  question.
-[ ] id convert Ä‘Æ°á»£c sang int.
-[ ] question khÃ´ng rá»—ng sau normalize.
-[ ] KhÃ´ng cÃ³ duplicate id.
-[ ] Output lÃ  data/processed/test_questions.parquet.
+[ ] Validate JSON là list.
+[ ] Mỗi item có id và question.
+[ ] id convert được sang int.
+[ ] question không rỗng sau normalize.
+[ ] Không có duplicate id.
+[ ] Output là data/processed/test_questions.parquet.
 ```
 
 ### User-run commands
@@ -590,21 +590,21 @@ PY
 ### Expected result
 
 ```text
-Sá»‘ dÃ²ng = 2000.
+Số dòng = 2000.
 id unique = 2000.
 ```
 
 ---
 
-## P1.T5 â€” Load phapdien
+## P1.T5 — Load phapdien
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
 Load `tmquan/phapdien-moj-gov-vn` config `articles`.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T5`.
+Dùng prompt: `P1.T5`.
 
 ### Deliverables
 
@@ -636,11 +636,11 @@ source_links_json
 ### Acceptance Criteria
 
 ```text
-[ ] Load Ä‘Æ°á»£c dataset phapdien.
-[ ] content_text khÃ´ng rá»—ng vá»›i pháº§n lá»›n rows.
-[ ] source_note_text Ä‘Æ°á»£c giá»¯ láº¡i.
-[ ] source_links Ä‘Æ°á»£c serialize thÃ nh JSON string.
-[ ] KhÃ´ng dÃ¹ng article_title lÃ m citation chÃ­nh thá»©c.
+[ ] Load được dataset phapdien.
+[ ] content_text không rỗng với phần lớn rows.
+[ ] source_note_text được giữ lại.
+[ ] source_links được serialize thành JSON string.
+[ ] Không dùng article_title làm citation chính thức.
 ```
 
 ### User-run commands
@@ -658,20 +658,20 @@ PY
 ### Expected result
 
 ```text
-Táº¡o Ä‘Æ°á»£c phapdien_articles.parquet vÃ  in sample rows.
+Tạo được phapdien_articles.parquet và in sample rows.
 ```
 
 ---
 
-## P1.T6 â€” Load anle
+## P1.T6 — Load anle
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
 Load `tmquan/anle-toaan-gov-vn` config `sentences`.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T6`.
+Dùng prompt: `P1.T6`.
 
 ### Deliverables
 
@@ -689,10 +689,10 @@ data/processed/anle_units.parquet
 
 ```text
 [ ] Load sentence/paragraph-level units.
-[ ] CÃ³ unit_id unique.
-[ ] CÃ³ text khÃ´ng rá»—ng.
-[ ] KhÃ´ng dÃ¹ng embedding cÃ³ sáºµn tá»« dataset.
-[ ] anle chá»‰ lÃ  auxiliary source.
+[ ] Có unit_id unique.
+[ ] Có text không rỗng.
+[ ] Không dùng embedding có sẵn từ dataset.
+[ ] anle chỉ là auxiliary source.
 ```
 
 ### User-run commands
@@ -710,20 +710,20 @@ PY
 ### Expected result
 
 ```text
-Táº¡o Ä‘Æ°á»£c anle_units.parquet vÃ  in sample rows.
+Tạo được anle_units.parquet và in sample rows.
 ```
 
 ---
 
-## P1.T7 â€” Load VBPL documents
+## P1.T7 — Load VBPL documents
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Load `tmquan/vbpl-vn` thÃ nh document-level parquet.
+Load `tmquan/vbpl-vn` thành document-level parquet.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T7`.
+Dùng prompt: `P1.T7`.
 
 ### Deliverables
 
@@ -756,11 +756,11 @@ legal_area
 ### Acceptance Criteria
 
 ```text
-[ ] Load Ä‘Æ°á»£c VBPL dataset.
-[ ] CÃ³ markdown/body text.
-[ ] normalized_title Ä‘Æ°á»£c táº¡o á»•n Ä‘á»‹nh.
-[ ] CÃ³ log cho rows thiáº¿u law_id hoáº·c markdown.
-[ ] KhÃ´ng extract article trong task nÃ y.
+[ ] Load được VBPL dataset.
+[ ] Có markdown/body text.
+[ ] normalized_title được tạo ổn định.
+[ ] Có log cho rows thiếu law_id hoặc markdown.
+[ ] Không extract article trong task này.
 ```
 
 ### User-run commands
@@ -778,20 +778,20 @@ PY
 ### Expected result
 
 ```text
-Táº¡o Ä‘Æ°á»£c legal_documents.parquet.
+Tạo được legal_documents.parquet.
 ```
 
 ---
 
-## P1.T8 â€” Extract legal articles
+## P1.T8 — Extract legal articles
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-TÃ¡ch Äiá»u luáº­t tá»« `legal_documents.parquet`.
+Tách Điều luật từ `legal_documents.parquet`.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T8`.
+Dùng prompt: `P1.T8`.
 
 ### Deliverables
 
@@ -808,12 +808,12 @@ data/processed/legal_articles.parquet
 ### Acceptance Criteria
 
 ```text
-[ ] Extract Ä‘Æ°á»£c article-level rows.
-[ ] article_id format: law_id|law_title|Äiá»u X.
+[ ] Extract được article-level rows.
+[ ] article_id format: law_id|law_title|Điều X.
 [ ] article_id unique.
-[ ] KhÃ´ng cÃ³ article thiáº¿u law_id/law_title/article_no/article_text.
-[ ] CÃ³ log vÄƒn báº£n khÃ´ng extract Ä‘Æ°á»£c Äiá»u.
-[ ] CÃ³ test cho regex article extraction á»Ÿ má»©c cÆ¡ báº£n.
+[ ] Không có article thiếu law_id/law_title/article_no/article_text.
+[ ] Có log văn bản không extract được Điều.
+[ ] Có test cho regex article extraction ở mức cơ bản.
 ```
 
 ### User-run commands
@@ -834,21 +834,21 @@ PY
 ### Expected result
 
 ```text
-Táº¡o Ä‘Æ°á»£c legal_articles.parquet.
-unique article_id báº±ng sá»‘ dÃ²ng.
+Tạo được legal_articles.parquet.
+unique article_id bằng số dòng.
 ```
 
 ---
 
-## P1.T9 â€” Map phapdien to VBPL
+## P1.T9 — Map phapdien to VBPL
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
 Map phapdien hits sang canonical legal articles.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T9`.
+Dùng prompt: `P1.T9`.
 
 ### Deliverables
 
@@ -865,13 +865,13 @@ data/processed/phapdien_to_vbpl_map.parquet
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ phapdien_id.
-[ ] CÃ³ legal_article_id.
-[ ] CÃ³ law_id, law_title, article_no.
-[ ] CÃ³ mapping_score.
-[ ] CÃ³ mapping_method.
-[ ] Mapping dÆ°á»›i threshold Ä‘Æ°á»£c log ra file/debug.
-[ ] KhÃ´ng dÃ¹ng phapdien article_title lÃ m official citation.
+[ ] Có phapdien_id.
+[ ] Có legal_article_id.
+[ ] Có law_id, law_title, article_no.
+[ ] Có mapping_score.
+[ ] Có mapping_method.
+[ ] Mapping dưới threshold được log ra file/debug.
+[ ] Không dùng phapdien article_title làm official citation.
 ```
 
 ### User-run commands
@@ -892,20 +892,20 @@ PY
 ### Expected result
 
 ```text
-Táº¡o Ä‘Æ°á»£c phapdien_to_vbpl_map.parquet vá»›i mapping_score.
+Tạo được phapdien_to_vbpl_map.parquet với mapping_score.
 ```
 
 ---
 
-## P1.T10 â€” Build corpus orchestration
+## P1.T10 — Build corpus orchestration
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Gá»™p toÃ n bá»™ Phase 1 thÃ nh má»™t script.
+Gộp toàn bộ Phase 1 thành một script.
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P1.T10`.
+Dùng prompt: `P1.T10`.
 
 ### Deliverables
 
@@ -917,11 +917,11 @@ scripts/01_build_corpus.py
 ### Acceptance Criteria
 
 ```text
-[ ] scripts/01_build_corpus.py gá»i cÃ¡c module Phase 1 theo thá»© tá»±.
-[ ] Script khÃ´ng chá»©a business logic lá»›n.
-[ ] CÃ³ logging tá»«ng step.
-[ ] CÃ³ option skip_existing náº¿u phÃ¹ há»£p.
-[ ] NgÆ°á»i dÃ¹ng tá»± cháº¡y script.
+[ ] scripts/01_build_corpus.py gọi các module Phase 1 theo thứ tự.
+[ ] Script không chứa business logic lớn.
+[ ] Có logging từng step.
+[ ] Có option skip_existing nếu phù hợp.
+[ ] Người dùng tự chạy script.
 ```
 
 ### User-run commands
@@ -934,87 +934,87 @@ ls -lh data/processed
 ### Expected result
 
 ```text
-Táº¡o Ä‘á»§ 6 parquet files cá»§a Phase 1.
+Tạo đủ 6 parquet files của Phase 1.
 ```
 
-## P1.T11 â€” Prepare Indexable Corpus
+## P1.T11 — Prepare Indexable Corpus
 
-### Má»¥c tiÃªu
+### Mục tiêu
 
-Táº¡o lá»›p dá»¯ liá»‡u trung gian phá»¥c vá»¥ indexing cho Phase 2, nháº±m trÃ¡nh Ä‘Æ°a trá»±c tiáº¿p `legal_articles.parquet` vÃ  `phapdien_articles.parquet` vÃ o OpenSearch/Qdrant khi dá»¯ liá»‡u cÃ²n cÃ³ outlier quÃ¡ dÃ i hoáº·c row rá»—ng.
+Tạo lớp dữ liệu trung gian phục vụ indexing cho Phase 2, nhằm tránh đưa trực tiếp `legal_articles.parquet` và `phapdien_articles.parquet` vào OpenSearch/Qdrant khi dữ liệu còn có outlier quá dài hoặc row rỗng.
 
-Task nÃ y **khÃ´ng thay Ä‘á»•i canonical corpus**. CÃ¡c file canonical sau váº«n lÃ  source of truth:
+Task này **không thay đổi canonical corpus**. Các file canonical sau vẫn là source of truth:
 
 ```text
 data/processed/legal_articles.parquet
 data/processed/phapdien_articles.parquet
 ```
 
-Thay vÃ o Ä‘Ã³, task nÃ y táº¡o cÃ¡c file derived/indexable:
+Thay vào đó, task này tạo các file derived/indexable:
 
 ```text
 data/processed/legal_article_chunks.parquet
 data/processed/phapdien_articles_index.parquet
 ```
 
-Phase 2 sáº½ index tá»« cÃ¡c file derived nÃ y.
+Phase 2 sẽ index từ các file derived này.
 
 ---
 
-### Bá»‘i cáº£nh sau Phase 1
+### Bối cảnh sau Phase 1
 
-Phase 1 Ä‘Ã£ build xong vá»›i káº¿t quáº£:
+Phase 1 đã build xong với kết quả:
 
 ```text
 test_questions: 2.000 rows, unique id 2.000
-phapdien_articles: 64.464 rows, cÃ³ 406 rows empty content_text
-anle_units: 273.379 rows, unit_id unique, khÃ´ng empty text
-legal_documents: 146.555 rows, khÃ´ng thiáº¿u law_id/markdown
-legal_articles: 1.015.680 rows, article_id unique báº±ng sá»‘ dÃ²ng, khÃ´ng thiáº¿u required fields
-phapdien_to_vbpl_map: 60.053 rows, khÃ´ng thiáº¿u legal_article_id
+phapdien_articles: 64.464 rows, có 406 rows empty content_text
+anle_units: 273.379 rows, unit_id unique, không empty text
+legal_documents: 146.555 rows, không thiếu law_id/markdown
+legal_articles: 1.015.680 rows, article_id unique bằng số dòng, không thiếu required fields
+phapdien_to_vbpl_map: 60.053 rows, không thiếu legal_article_id
 mapping coverage phapdien: 93.16%
-low-confidence/unmapped phapdien: 4.411 rows, Ä‘Ã£ cÃ³ debug parquet
+low-confidence/unmapped phapdien: 4.411 rows, đã có debug parquet
 ```
 
-Risk cáº§n xá»­ lÃ½ trÆ°á»›c Phase 2:
+Risk cần xử lý trước Phase 2:
 
 ```text
-1. legal_articles.article_text cÃ³ outlier ráº¥t lá»›n, max khoáº£ng 2.31M kÃ½ tá»±.
-2. phapdien cÃ³ 406 rows rá»—ng content_text.
-3. 4.411 phapdien rows chÆ°a map Ä‘Æ°á»£c, nhÆ°ng táº¡m thá»i defer vÃ¬ khÃ´ng áº£nh hÆ°á»Ÿng nguyÃªn táº¯c citation.
+1. legal_articles.article_text có outlier rất lớn, max khoảng 2.31M ký tự.
+2. phapdien có 406 rows rỗng content_text.
+3. 4.411 phapdien rows chưa map được, nhưng tạm thời defer vì không ảnh hưởng nguyên tắc citation.
 ```
 
 ---
 
-### NguyÃªn táº¯c báº¯t buá»™c
+### Nguyên tắc bắt buộc
 
 ```text
-[ ] KhÃ´ng sá»­a trá»±c tiáº¿p legal_articles.parquet.
-[ ] KhÃ´ng sá»­a trá»±c tiáº¿p phapdien_articles.parquet.
-[ ] legal_articles.parquet váº«n lÃ  source of truth cho relevant_docs/relevant_articles.
-[ ] Index corpus chá»‰ phá»¥c vá»¥ retrieval.
-[ ] Khi retrieval hit vÃ o chunk, output cuá»‘i cÃ¹ng váº«n pháº£i group vá» parent article_id.
-[ ] KhÃ´ng dÃ¹ng chunk_id lÃ m citation.
-[ ] KhÃ´ng xá»­ lÃ½ 4.411 unmapped phapdien trong task nÃ y.
+[ ] Không sửa trực tiếp legal_articles.parquet.
+[ ] Không sửa trực tiếp phapdien_articles.parquet.
+[ ] legal_articles.parquet vẫn là source of truth cho relevant_docs/relevant_articles.
+[ ] Index corpus chỉ phục vụ retrieval.
+[ ] Khi retrieval hit vào chunk, output cuối cùng vẫn phải group về parent article_id.
+[ ] Không dùng chunk_id làm citation.
+[ ] Không xử lý 4.411 unmapped phapdien trong task này.
 ```
 
 ---
 
 ### Deliverables
 
-Táº¡o module:
+Tạo module:
 
 ```text
 backend/knowledge_processing/prepare_index_corpus.py
 ```
 
-Táº¡o script:
+Tạo script:
 
 ```text
 scripts/01_prepare_index_corpus.py
 ```
 
-Táº¡o output files:
+Tạo output files:
 
 ```text
 data/processed/legal_article_chunks.parquet
@@ -1024,7 +1024,7 @@ data/processed/debug/legal_article_chunk_report.csv
 data/processed/debug/phapdien_empty_content_report.csv
 ```
 
-Táº¡o test náº¿u phÃ¹ há»£p:
+Tạo test nếu phù hợp:
 
 ```text
 tests/test_prepare_index_corpus.py
@@ -1032,7 +1032,7 @@ tests/test_prepare_index_corpus.py
 
 ---
 
-### Output 1 â€” legal_article_chunks.parquet
+### Output 1 — legal_article_chunks.parquet
 
 Input:
 
@@ -1046,7 +1046,7 @@ Output:
 data/processed/legal_article_chunks.parquet
 ```
 
-Schema Ä‘á» xuáº¥t:
+Schema đề xuất:
 
 ```text
 chunk_id
@@ -1072,15 +1072,15 @@ status
 Chunking rules:
 
 ```text
-[ ] Náº¿u article_text ngáº¯n, táº¡o 1 chunk.
-[ ] Náº¿u article_text quÃ¡ dÃ i, split thÃ nh nhiá»u chunks.
-[ ] KhÃ´ng táº¡o chunk_text rá»—ng.
-[ ] KhÃ´ng lÃ m máº¥t parent article_id.
-[ ] chunk_text dÃ¹ng cho BM25/vector index.
-[ ] article_id dÃ¹ng Ä‘á»ƒ group retrieval result vá» Äiá»u luáº­t canonical.
+[ ] Nếu article_text ngắn, tạo 1 chunk.
+[ ] Nếu article_text quá dài, split thành nhiều chunks.
+[ ] Không tạo chunk_text rỗng.
+[ ] Không làm mất parent article_id.
+[ ] chunk_text dùng cho BM25/vector index.
+[ ] article_id dùng để group retrieval result về Điều luật canonical.
 ```
 
-Config máº·c Ä‘á»‹nh:
+Config mặc định:
 
 ```yaml
 max_chunk_chars: 3000
@@ -1089,18 +1089,18 @@ max_article_chars_for_single_doc: 12000
 min_text_chars: 20
 ```
 
-Gá»£i Ã½ xá»­ lÃ½:
+Gợi ý xử lý:
 
 ```text
-- Æ¯u tiÃªn split theo ranh giá»›i Ä‘oáº¡n/khoáº£n/dÃ²ng náº¿u lÃ m Ä‘Æ°á»£c.
-- Náº¿u khÃ´ng tÃ¬m Ä‘Æ°á»£c ranh giá»›i phÃ¹ há»£p, fallback split theo character window.
-- Overlap khÃ´ng Ä‘Æ°á»£c táº¡o infinite loop.
-- Article quÃ¡ ngáº¯n hoáº·c text lá»—i cáº§n Ä‘Æ°á»£c log, khÃ´ng lÃ m crash pipeline.
+- Ưu tiên split theo ranh giới đoạn/khoản/dòng nếu làm được.
+- Nếu không tìm được ranh giới phù hợp, fallback split theo character window.
+- Overlap không được tạo infinite loop.
+- Article quá ngắn hoặc text lỗi cần được log, không làm crash pipeline.
 ```
 
 ---
 
-### Output 2 â€” phapdien_articles_index.parquet
+### Output 2 — phapdien_articles_index.parquet
 
 Input:
 
@@ -1114,15 +1114,15 @@ Output:
 data/processed/phapdien_articles_index.parquet
 ```
 
-YÃªu cáº§u:
+Yêu cầu:
 
 ```text
-[ ] Loáº¡i khá»i index input cÃ¡c row cÃ³ content_text null hoáº·c rá»—ng sau strip.
-[ ] KhÃ´ng xÃ³a row khá»i phapdien_articles.parquet gá»‘c.
-[ ] Giá»¯ cÃ¡c field cáº§n cho retrieval.
+[ ] Loại khỏi index input các row có content_text null hoặc rỗng sau strip.
+[ ] Không xóa row khỏi phapdien_articles.parquet gốc.
+[ ] Giữ các field cần cho retrieval.
 ```
 
-Fields cáº§n giá»¯:
+Fields cần giữ:
 
 ```text
 phapdien_id
@@ -1137,7 +1137,7 @@ source_url
 source_links_json
 ```
 
-CÃ¡c row rá»—ng Ä‘Æ°á»£c ghi vÃ o:
+Các row rỗng được ghi vào:
 
 ```text
 data/processed/debug/phapdien_empty_content_report.csv
@@ -1145,15 +1145,15 @@ data/processed/debug/phapdien_empty_content_report.csv
 
 ---
 
-### Output 3 â€” legal_article_text_length_report.csv
+### Output 3 — legal_article_text_length_report.csv
 
-Táº¡o report:
+Tạo report:
 
 ```text
 data/processed/debug/legal_article_text_length_report.csv
 ```
 
-Fields tá»‘i thiá»ƒu:
+Fields tối thiểu:
 
 ```text
 article_id
@@ -1167,24 +1167,24 @@ status
 domain
 ```
 
-YÃªu cáº§u:
+Yêu cầu:
 
 ```text
-[ ] Sort giáº£m dáº§n theo article_text_char_len.
-[ ] DÃ¹ng Ä‘á»ƒ audit cÃ¡c Äiá»u luáº­t outlier quÃ¡ dÃ i.
+[ ] Sort giảm dần theo article_text_char_len.
+[ ] Dùng để audit các Điều luật outlier quá dài.
 ```
 
 ---
 
-### Output 4 â€” legal_article_chunk_report.csv
+### Output 4 — legal_article_chunk_report.csv
 
-Táº¡o report:
+Tạo report:
 
 ```text
 data/processed/debug/legal_article_chunk_report.csv
 ```
 
-Report cáº§n cÃ³:
+Report cần có:
 
 ```text
 total_articles
@@ -1200,13 +1200,13 @@ max_article_chars_for_single_doc
 min_text_chars
 ```
 
-CÃ³ thá»ƒ lÆ°u dáº¡ng CSV má»™t dÃ²ng Ä‘á»ƒ dá»… Ä‘á»c báº±ng Polars/Pandas.
+Có thể lưu dạng CSV một dòng để dễ đọc bằng Polars/Pandas.
 
 ---
 
 ### Required function
 
-Trong `prepare_index_corpus.py`, táº¡o function chÃ­nh:
+Trong `prepare_index_corpus.py`, tạo function chính:
 
 ```python
 def prepare_indexable_corpus(
@@ -1223,7 +1223,7 @@ def prepare_indexable_corpus(
     ...
 ```
 
-Return summary dict gá»“m:
+Return summary dict gồm:
 
 ```text
 legal_articles_count
@@ -1239,13 +1239,13 @@ reports_created
 
 ### Script entrypoint
 
-Táº¡o:
+Tạo:
 
 ```text
 scripts/01_prepare_index_corpus.py
 ```
 
-Script cáº§n há»— trá»£ argparse:
+Script cần hỗ trợ argparse:
 
 ```text
 --max-chunk-chars
@@ -1254,35 +1254,35 @@ Script cáº§n há»— trá»£ argparse:
 --max-article-chars-for-single-doc
 ```
 
-YÃªu cáº§u:
+Yêu cầu:
 
 ```text
-[ ] Script chá»‰ gá»i backend function.
-[ ] KhÃ´ng chá»©a business logic lá»›n.
-[ ] CÃ³ logging rÃµ tá»«ng bÆ°á»›c.
-[ ] In summary cuá»‘i cÃ¹ng.
+[ ] Script chỉ gọi backend function.
+[ ] Không chứa business logic lớn.
+[ ] Có logging rõ từng bước.
+[ ] In summary cuối cùng.
 ```
 
 ---
 
 ### Tests
 
-Táº¡o:
+Tạo:
 
 ```text
 tests/test_prepare_index_corpus.py
 ```
 
-Test tá»‘i thiá»ƒu:
+Test tối thiểu:
 
 ```text
-[ ] Short article táº¡o 1 chunk.
-[ ] Long article táº¡o nhiá»u chunks.
-[ ] chunk_id giá»¯ parent article_id.
-[ ] Overlap khÃ´ng táº¡o infinite loop.
-[ ] KhÃ´ng cÃ³ chunk_text rá»—ng.
-[ ] phapdien empty content bá»‹ filter khá»i index output.
-[ ] legal_articles canonical khÃ´ng bá»‹ modify.
+[ ] Short article tạo 1 chunk.
+[ ] Long article tạo nhiều chunks.
+[ ] chunk_id giữ parent article_id.
+[ ] Overlap không tạo infinite loop.
+[ ] Không có chunk_text rỗng.
+[ ] phapdien empty content bị filter khỏi index output.
+[ ] legal_articles canonical không bị modify.
 ```
 
 ---
@@ -1290,39 +1290,39 @@ Test tá»‘i thiá»ƒu:
 ### Acceptance Criteria
 
 ```text
-[ ] legal_articles.parquet khÃ´ng bá»‹ sá»­a.
-[ ] phapdien_articles.parquet khÃ´ng bá»‹ sá»­a.
-[ ] Táº¡o Ä‘Æ°á»£c legal_article_chunks.parquet.
-[ ] Táº¡o Ä‘Æ°á»£c phapdien_articles_index.parquet.
-[ ] Táº¡o Ä‘Æ°á»£c legal_article_text_length_report.csv.
-[ ] Táº¡o Ä‘Æ°á»£c legal_article_chunk_report.csv.
-[ ] Táº¡o Ä‘Æ°á»£c phapdien_empty_content_report.csv.
-[ ] legal_article_chunks.parquet cÃ³ chunk_id unique.
-[ ] Má»—i chunk cÃ³ parent article_id.
-[ ] KhÃ´ng cÃ³ chunk_text rá»—ng.
-[ ] phapdien_articles_index.parquet khÃ´ng cÃ³ content_text rá»—ng.
-[ ] Code cÃ³ type hints.
-[ ] Logic chunking cÃ³ comment tiáº¿ng Viá»‡t.
-[ ] KhÃ´ng xá»­ lÃ½ 4.411 unmapped phapdien trong task nÃ y.
+[ ] legal_articles.parquet không bị sửa.
+[ ] phapdien_articles.parquet không bị sửa.
+[ ] Tạo được legal_article_chunks.parquet.
+[ ] Tạo được phapdien_articles_index.parquet.
+[ ] Tạo được legal_article_text_length_report.csv.
+[ ] Tạo được legal_article_chunk_report.csv.
+[ ] Tạo được phapdien_empty_content_report.csv.
+[ ] legal_article_chunks.parquet có chunk_id unique.
+[ ] Mỗi chunk có parent article_id.
+[ ] Không có chunk_text rỗng.
+[ ] phapdien_articles_index.parquet không có content_text rỗng.
+[ ] Code có type hints.
+[ ] Logic chunking có comment tiếng Việt.
+[ ] Không xử lý 4.411 unmapped phapdien trong task này.
 ```
 
 ---
 
 ### User-run commands
 
-Cháº¡y test:
+Chạy test:
 
 ```bash
 pytest tests/test_prepare_index_corpus.py -q
 ```
 
-Cháº¡y prepare index corpus:
+Chạy prepare index corpus:
 
 ```bash
 python scripts/01_prepare_index_corpus.py
 ```
 
-Kiá»ƒm tra output:
+Kiểm tra output:
 
 ```bash
 python - <<'PY'
@@ -1374,10 +1374,10 @@ PY
 ### Expected result
 
 ```text
-legal_article_chunks.parquet tá»“n táº¡i
-phapdien_articles_index.parquet tá»“n táº¡i
-debug reports tá»“n táº¡i
-chunk_id unique = sá»‘ dÃ²ng chunks
+legal_article_chunks.parquet tồn tại
+phapdien_articles_index.parquet tồn tại
+debug reports tồn tại
+chunk_id unique = số dòng chunks
 empty chunk_text = 0
 empty phapdien content_text = 0
 ```
@@ -1386,14 +1386,14 @@ empty phapdien content_text = 0
 
 ### Phase 2 dependency update
 
-Sau task nÃ y, Phase 2 khÃ´ng index trá»±c tiáº¿p full text tá»«:
+Sau task này, Phase 2 không index trực tiếp full text từ:
 
 ```text
 data/processed/legal_articles.parquet
 data/processed/phapdien_articles.parquet
 ```
 
-Thay vÃ o Ä‘Ã³, Phase 2 index tá»«:
+Thay vào đó, Phase 2 index từ:
 
 ```text
 data/processed/legal_article_chunks.parquet
@@ -1401,17 +1401,17 @@ data/processed/phapdien_articles_index.parquet
 data/processed/anle_units.parquet
 ```
 
-Khi retrieval hit vÃ o `legal_article_chunks`, há»‡ thá»‘ng pháº£i group káº¿t quáº£ vá» parent `article_id` trÆ°á»›c khi article selection vÃ  submission builder xá»­ lÃ½.
+Khi retrieval hit vào `legal_article_chunks`, hệ thống phải group kết quả về parent `article_id` trước khi article selection và submission builder xử lý.
 
 ---
 
-# Phase 2 â€” Indexing
+# Phase 2 — Indexing
 
-## NguyÃªn táº¯c chung cá»§a Phase 2
+## Nguyên tắc chung của Phase 2
 
-Phase 2 xÃ¢y dá»±ng cÃ¡c index phá»¥c vá»¥ retrieval. Phase 2 **khÃ´ng sinh citation** vÃ  **khÃ´ng thay Ä‘á»•i canonical corpus**.
+Phase 2 xây dựng các index phục vụ retrieval. Phase 2 **không sinh citation** và **không thay đổi canonical corpus**.
 
-Nguá»“n dá»¯ liá»‡u báº¯t buá»™c:
+Nguồn dữ liệu bắt buộc:
 
 ```text
 Legal BM25/vector retrieval:
@@ -1427,26 +1427,26 @@ Exact index / canonical lookup:
 - data/processed/legal_articles.parquet
 ```
 
-Quy táº¯c báº¯t buá»™c:
+Quy tắc bắt buộc:
 
 ```text
-[ ] KhÃ´ng index trá»±c tiáº¿p full article_text tá»« legal_articles.parquet vÃ o BM25/vector legal retrieval.
-[ ] BM25/vector legal retrieval pháº£i dÃ¹ng legal_article_chunks.parquet.
-[ ] legal_articles.parquet chá»‰ dÃ¹ng cho exact lookup, canonical registry, citation vÃ  submission.
-[ ] chunk_id khÃ´ng Ä‘Æ°á»£c dÃ¹ng lÃ m citation.
-[ ] Retrieval hits tá»« legal chunks pháº£i giá»¯ parent article_id.
-[ ] Retrieval layer pháº£i dedup/group chunk hits vá» article_id trÆ°á»›c article selection.
-[ ] Phapdien index pháº£i dÃ¹ng phapdien_articles_index.parquet, khÃ´ng dÃ¹ng phapdien_articles.parquet gá»‘c.
-[ ] Neo4j khÃ´ng thuá»™c Phase 2; Neo4j chá»‰ triá»ƒn khai á»Ÿ Phase 8.
+[ ] Không index trực tiếp full article_text từ legal_articles.parquet vào BM25/vector legal retrieval.
+[ ] BM25/vector legal retrieval phải dùng legal_article_chunks.parquet.
+[ ] legal_articles.parquet chỉ dùng cho exact lookup, canonical registry, citation và submission.
+[ ] chunk_id không được dùng làm citation.
+[ ] Retrieval hits từ legal chunks phải giữ parent article_id.
+[ ] Retrieval layer phải dedup/group chunk hits về article_id trước article selection.
+[ ] Phapdien index phải dùng phapdien_articles_index.parquet, không dùng phapdien_articles.parquet gốc.
+[ ] Neo4j không thuộc Phase 2; Neo4j chỉ triển khai ở Phase 8.
 ```
 
 ---
 
-## P2.T1 â€” Infrastructure clients
+## P2.T1 — Infrastructure clients
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T1`.
+Dùng prompt: `P2.T1`.
 
 ### Deliverables
 
@@ -1459,10 +1459,10 @@ backend/infrastructure/database/duckdb_client.py
 ### Acceptance Criteria
 
 ```text
-[ ] OpenSearch client cÃ³ health_check().
-[ ] Qdrant client cÃ³ health_check().
-[ ] DuckDB helper Ä‘á»c parquet Ä‘Æ°á»£c.
-[ ] KhÃ´ng táº¡o index á»Ÿ import-time.
+[ ] OpenSearch client có health_check().
+[ ] Qdrant client có health_check().
+[ ] DuckDB helper đọc parquet được.
+[ ] Không tạo index ở import-time.
 ```
 
 ### User-run commands
@@ -1477,11 +1477,11 @@ PY
 
 ---
 
-## P2.T2 â€” vnlegal-lal embedding wrapper
+## P2.T2 — vnlegal-lal embedding wrapper
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T2`.
+Dùng prompt: `P2.T2`.
 
 ### Deliverables
 
@@ -1492,14 +1492,14 @@ backend/infrastructure/embedding_models/vnlegal_lal.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ encode_query().
-[ ] CÃ³ encode_documents().
-[ ] Query cÃ³ instruction prefix.
-[ ] Document khÃ´ng cÃ³ instruction prefix.
-[ ] Output vector dimension = 1024 náº¿u model load Ä‘Ãºng.
-[ ] CÃ³ batching.
-[ ] CÃ³ normalize vector.
-[ ] Vá»›i vnlegal-lal, Æ°u tiÃªn AutoModel + last-token pooling theo model card; khÃ´ng rely vÃ o SentenceTransformer fallback mean pooling náº¿u Ä‘Ã£ cÃ³ wrapper chuáº©n.
+[ ] Có encode_query().
+[ ] Có encode_documents().
+[ ] Query có instruction prefix.
+[ ] Document không có instruction prefix.
+[ ] Output vector dimension = 1024 nếu model load đúng.
+[ ] Có batching.
+[ ] Có normalize vector.
+[ ] Với vnlegal-lal, ưu tiên AutoModel + last-token pooling theo model card; không rely vào SentenceTransformer fallback mean pooling nếu đã có wrapper chuẩn.
 ```
 
 ### User-run commands
@@ -1508,18 +1508,18 @@ backend/infrastructure/embedding_models/vnlegal_lal.py
 python - <<'PY'
 from backend.infrastructure.embedding_models.vnlegal_lal import VNLegalLALEmbedder
 m = VNLegalLALEmbedder(device="cuda", batch_size=2, max_length=512)
-v = m.encode_query("Doanh nghiá»‡p nhá» vÃ  vá»«a lÃ  gÃ¬?")
+v = m.encode_query("Doanh nghiệp nhỏ và vừa là gì?")
 print(len(v), v[:5])
 PY
 ```
 
 ---
 
-## P2.T3 â€” Build BM25 indexes
+## P2.T3 — Build BM25 indexes
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T3`.
+Dùng prompt: `P2.T3`.
 
 ### Deliverables
 
@@ -1572,15 +1572,15 @@ status
 ### Acceptance Criteria
 
 ```text
-[ ] Build Ä‘Æ°á»£c legal_article_chunks_bm25.
-[ ] Build Ä‘Æ°á»£c phapdien_articles_bm25.
-[ ] Build Ä‘Æ°á»£c anle_units_bm25.
-[ ] Legal BM25 Ä‘á»c legal_article_chunks.parquet, khÃ´ng Ä‘á»c legal_articles.parquet.
-[ ] Legal BM25 index dÃ¹ng chunk_text lÃ m text chÃ­nh.
-[ ] Payload legal BM25 giá»¯ cáº£ chunk_id vÃ  parent article_id.
-[ ] Phapdien BM25 Ä‘á»c phapdien_articles_index.parquet.
-[ ] CÃ³ recreate flag.
-[ ] CÃ³ max_rows/sample option náº¿u phÃ¹ há»£p.
+[ ] Build được legal_article_chunks_bm25.
+[ ] Build được phapdien_articles_bm25.
+[ ] Build được anle_units_bm25.
+[ ] Legal BM25 đọc legal_article_chunks.parquet, không đọc legal_articles.parquet.
+[ ] Legal BM25 index dùng chunk_text làm text chính.
+[ ] Payload legal BM25 giữ cả chunk_id và parent article_id.
+[ ] Phapdien BM25 đọc phapdien_articles_index.parquet.
+[ ] Có recreate flag.
+[ ] Có max_rows/sample option nếu phù hợp.
 ```
 
 ### User-run commands
@@ -1595,11 +1595,11 @@ PY
 
 ---
 
-## P2.T4 â€” Build vector indexes
+## P2.T4 — Build vector indexes
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T4`.
+Dùng prompt: `P2.T4`.
 
 ### Deliverables
 
@@ -1623,13 +1623,13 @@ phapdien_articles_dense
 anle_units_dense
 ```
 
-### Legal chunk text format Ä‘á»ƒ embed
+### Legal chunk text format để embed
 
 ```text
-TÃªn vÄƒn báº£n: {law_title}
-Äiá»u: {article_no}
-TiÃªu Ä‘á» Ä‘iá»u: {article_title}
-Ná»™i dung chunk:
+Tên văn bản: {law_title}
+Điều: {article_no}
+Tiêu đề điều: {article_title}
+Nội dung chunk:
 {chunk_text}
 ```
 
@@ -1651,19 +1651,19 @@ status
 ### Acceptance Criteria
 
 ```text
-[ ] Build Ä‘Æ°á»£c legal_article_chunks_dense.
-[ ] Build Ä‘Æ°á»£c phapdien_articles_dense.
-[ ] Build Ä‘Æ°á»£c anle_units_dense.
-[ ] Legal vector index Ä‘á»c legal_article_chunks.parquet, khÃ´ng Ä‘á»c legal_articles.parquet.
-[ ] Legal vector index embed chunk_text kÃ¨m legal context.
-[ ] Payload giá»¯ chunk_id vÃ  parent article_id.
-[ ] KhÃ´ng dÃ¹ng chunk_id lÃ m canonical citation id.
-[ ] Phapdien vector Ä‘á»c phapdien_articles_index.parquet.
-[ ] CÃ³ batching.
-[ ] CÃ³ recreate flag.
-[ ] CÃ³ resume/skip option náº¿u phÃ¹ há»£p.
-[ ] Náº¿u Ä‘á»•i tá»« article-level sang chunk-level thÃ¬ pháº£i rebuild vá»›i recreate=True, resume=False.
-[ ] KhÃ´ng trá»™n embedding tá»« mean pooling vÃ  last-token pooling trong cÃ¹ng collection.
+[ ] Build được legal_article_chunks_dense.
+[ ] Build được phapdien_articles_dense.
+[ ] Build được anle_units_dense.
+[ ] Legal vector index đọc legal_article_chunks.parquet, không đọc legal_articles.parquet.
+[ ] Legal vector index embed chunk_text kèm legal context.
+[ ] Payload giữ chunk_id và parent article_id.
+[ ] Không dùng chunk_id làm canonical citation id.
+[ ] Phapdien vector đọc phapdien_articles_index.parquet.
+[ ] Có batching.
+[ ] Có recreate flag.
+[ ] Có resume/skip option nếu phù hợp.
+[ ] Nếu đổi từ article-level sang chunk-level thì phải rebuild với recreate=True, resume=False.
+[ ] Không trộn embedding từ mean pooling và last-token pooling trong cùng collection.
 ```
 
 ### User-run commands
@@ -1686,17 +1686,17 @@ PY
 
 ---
 
-## P2.T5 â€” Build exact index
+## P2.T5 — Build exact index
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T5`.
+Dùng prompt: `P2.T5`.
 
 ### Deliverables
 
 ```text
 backend/indexing/build_exact_index.py
-data/processed/exact_index.json hoáº·c parquet
+data/processed/exact_index.json hoặc parquet
 ```
 
 ### Input
@@ -1708,14 +1708,14 @@ data/processed/legal_articles.parquet
 ### Acceptance Criteria
 
 ```text
-[ ] Exact index váº«n Ä‘á»c legal_articles.parquet.
+[ ] Exact index vẫn đọc legal_articles.parquet.
 [ ] Exact lookup theo law_id.
 [ ] Exact lookup theo article_no.
 [ ] Exact lookup theo law_id + article_no.
-[ ] Extract Ä‘Æ°á»£c tÃ i khoáº£n káº¿ toÃ¡n náº¿u phÃ¹ há»£p.
-[ ] Extract Ä‘Æ°á»£c deadline number náº¿u phÃ¹ há»£p.
+[ ] Extract được tài khoản kế toán nếu phù hợp.
+[ ] Extract được deadline number nếu phù hợp.
 [ ] Exact index load nhanh.
-[ ] KhÃ´ng dÃ¹ng legal_article_chunks.parquet cho exact citation registry.
+[ ] Không dùng legal_article_chunks.parquet cho exact citation registry.
 ```
 
 ### User-run commands
@@ -1731,26 +1731,26 @@ PY
 ---
 ## Task ID: P2.T5-OPTIMIZE-EXACT-INDEX-RUNTIME
 
-Báº¡n Ä‘ang code trong repository `Legal_Graph_RAG`.
+Bạn đang code trong repository `Legal_Graph_RAG`.
 
-TrÆ°á»›c khi code, hÃ£y Ä‘á»c:
+Trước khi code, hãy đọc:
 
 * `context.md`
 * `legal_rag_phase_plan_v3.md`
 * `codex_task_prompts_vi_v3.md`
-* `backend/indexing/build_exact_index.py` náº¿u Ä‘Ã£ tá»“n táº¡i
-* `tests/test_build_exact_index.py` náº¿u Ä‘Ã£ tá»“n táº¡i
+* `backend/indexing/build_exact_index.py` nếu đã tồn tại
+* `tests/test_build_exact_index.py` nếu đã tồn tại
 * `skills/11_code_quality_testing.md`
 
-### Bá»‘i cáº£nh hiá»‡n táº¡i
+### Bối cảnh hiện tại
 
-P2.T5 Ä‘Ã£ build Ä‘Æ°á»£c file:
+P2.T5 đã build được file:
 
 ```text
 data/processed/exact_index.json
 ```
 
-Káº¿t quáº£ kiá»ƒm tra:
+Kết quả kiểm tra:
 
 ```text
 size_gb: ~1.9GB
@@ -1763,7 +1763,7 @@ deadline_numbers: 1,624
 sanction_terms: 29,997
 ```
 
-`exact_index.json` Ä‘á»c Ä‘Æ°á»£c vÃ  khÃ´ng lá»—i JSON. `articles` khÃ´ng chá»©a `article_text`, chá»‰ chá»©a metadata ngáº¯n:
+`exact_index.json` đọc được và không lỗi JSON. `articles` không chứa `article_text`, chỉ chứa metadata ngắn:
 
 ```text
 article_id
@@ -1776,66 +1776,66 @@ domain
 status
 ```
 
-Váº¥n Ä‘á» chÃ­nh: `exact_index.json` quÃ¡ lá»›n vÃ¬ cÃ¡c inverted indexes lÆ°u láº·p láº¡i `article_id` dÃ i nhiá»u láº§n. Náº¿u Phase 4 runtime dÃ¹ng `json.load()` file 1.9GB thÃ¬ tá»‘n RAM, startup cháº­m vÃ  khÃ´ng phÃ¹ há»£p Ä‘á»ƒ cháº¡y retrieval nhiá»u láº§n.
+Vấn đề chính: `exact_index.json` quá lớn vì các inverted indexes lưu lặp lại `article_id` dài nhiều lần. Nếu Phase 4 runtime dùng `json.load()` file 1.9GB thì tốn RAM, startup chậm và không phù hợp để chạy retrieval nhiều lần.
 
-- Náº¿u project Ä‘Ã£ chá»n DuckDB lÃ m runtime exact index, cáº­p nháº­t deliverable thÃ nh data/processed/exact_index.duckdb.
-- KhÃ´ng giá»¯ mÃ´ táº£ báº¯t buá»™c exact_index/ folder Parquet náº¿u khÃ´ng cÃ²n triá»ƒn khai hÆ°á»›ng Ä‘Ã³.
+- Nếu project đã chọn DuckDB làm runtime exact index, cập nhật deliverable thành data/processed/exact_index.duckdb.
+- Không giữ mô tả bắt buộc exact_index/ folder Parquet nếu không còn triển khai hướng đó.
 
-### Má»¥c tiÃªu task
+### Mục tiêu task
 
-Tá»‘i Æ°u P2.T5 Ä‘á»ƒ táº¡o thÃªm exact index runtime-friendly dáº¡ng thÆ° má»¥c nhiá»u file Parquet/JSON metadata, thay vÃ¬ phá»¥ thuá»™c vÃ o má»™t file JSON lá»›n.
+Tối ưu P2.T5 để tạo thêm exact index runtime-friendly dạng thư mục nhiều file Parquet/JSON metadata, thay vì phụ thuộc vào một file JSON lớn.
 
-Má»¥c tiÃªu má»›i:
+Mục tiêu mới:
 
 ```text
 data/processed/exact_index/
-â”œâ”€â”€ articles.parquet
-â”œâ”€â”€ by_law_id.parquet
-â”œâ”€â”€ by_article_no.parquet
-â”œâ”€â”€ by_law_article.parquet
-â”œâ”€â”€ accounting_accounts.parquet
-â”œâ”€â”€ deadline_numbers.parquet
-â”œâ”€â”€ sanction_terms.parquet
-â””â”€â”€ metadata.json
+├── articles.parquet
+├── by_law_id.parquet
+├── by_article_no.parquet
+├── by_law_article.parquet
+├── accounting_accounts.parquet
+├── deadline_numbers.parquet
+├── sanction_terms.parquet
+└── metadata.json
 ```
 
-CÃ³ thá»ƒ giá»¯ `data/processed/exact_index.json` nhÆ° artifact debug/backward-compatible náº¿u code hiá»‡n táº¡i cáº§n, nhÆ°ng runtime Phase 4 nÃªn Æ°u tiÃªn Ä‘á»c thÆ° má»¥c `data/processed/exact_index/`.
+Có thể giữ `data/processed/exact_index.json` như artifact debug/backward-compatible nếu code hiện tại cần, nhưng runtime Phase 4 nên ưu tiên đọc thư mục `data/processed/exact_index/`.
 
-### YÃªu cáº§u thiáº¿t káº¿ báº¯t buá»™c
+### Yêu cầu thiết kế bắt buộc
 
-1. Exact index váº«n chá»‰ Ä‘á»c:
+1. Exact index vẫn chỉ đọc:
 
 ```text
 data/processed/legal_articles.parquet
 ```
 
-2. KhÃ´ng Ä‘á»c:
+2. Không đọc:
 
 ```text
 data/processed/legal_article_chunks.parquet
 ```
 
-3. KhÃ´ng dÃ¹ng OpenSearch/Qdrant.
+3. Không dùng OpenSearch/Qdrant.
 
-4. KhÃ´ng gá»i LLM.
+4. Không gọi LLM.
 
-5. KhÃ´ng sinh `results.json`.
+5. Không sinh `results.json`.
 
-6. KhÃ´ng chá»n final `relevant_articles`.
+6. Không chọn final `relevant_articles`.
 
-7. KhÃ´ng sá»­a BM25/vector index logic.
+7. Không sửa BM25/vector index logic.
 
-8. KhÃ´ng thay Ä‘á»•i canonical `legal_articles.parquet`.
+8. Không thay đổi canonical `legal_articles.parquet`.
 
-9. KhÃ´ng dÃ¹ng `chunk_id` trong exact index.
+9. Không dùng `chunk_id` trong exact index.
 
-10. Exact index runtime artifact pháº£i trÃ¡nh láº·p chuá»—i `article_id` dÃ i quÃ¡ nhiá»u láº§n báº±ng cÃ¡ch dÃ¹ng `article_idx` integer.
+10. Exact index runtime artifact phải tránh lặp chuỗi `article_id` dài quá nhiều lần bằng cách dùng `article_idx` integer.
 
-### Schema Ä‘á» xuáº¥t
+### Schema đề xuất
 
 #### 1. `articles.parquet`
 
-Má»—i dÃ²ng lÃ  má»™t canonical article.
+Mỗi dòng là một canonical article.
 
 Required columns:
 
@@ -1856,13 +1856,13 @@ relevant_doc_string
 relevant_article_string
 ```
 
-YÃªu cáº§u:
+Yêu cầu:
 
 ```text
-article_idx lÃ  int liÃªn tá»¥c tá»« 0 Ä‘áº¿n n-1.
+article_idx là int liên tục từ 0 đến n-1.
 article_id unique.
-KhÃ´ng cÃ³ duplicate article_idx.
-KhÃ´ng chá»©a article_text Ä‘á»ƒ trÃ¡nh file quÃ¡ lá»›n.
+Không có duplicate article_idx.
+Không chứa article_text để tránh file quá lớn.
 relevant_doc_string = law_id|law_title
 relevant_article_string = law_id|law_title|article_no
 ```
@@ -1876,7 +1876,7 @@ key
 article_idx
 ```
 
-Trong Ä‘Ã³ `key` lÃ  `normalized_law_id`.
+Trong đó `key` là `normalized_law_id`.
 
 #### 3. `by_article_no.parquet`
 
@@ -1887,9 +1887,9 @@ key
 article_idx
 ```
 
-Trong Ä‘Ã³ `key` lÃ  `normalized_article_no`.
+Trong đó `key` là `normalized_article_no`.
 
-LÆ°u Ã½: má»™t `article_no` nhÆ° â€œÄiá»u 4â€ cÃ³ thá»ƒ map tá»›i ráº¥t nhiá»u `article_idx`, khÃ´ng Ä‘Æ°á»£c assume unique.
+Lưu ý: một `article_no` như “Điều 4” có thể map tới rất nhiều `article_idx`, không được assume unique.
 
 #### 4. `by_law_article.parquet`
 
@@ -1903,14 +1903,14 @@ article_idx
 key_type
 ```
 
-Trong Ä‘Ã³ `key_type` cÃ³ thá»ƒ lÃ :
+Trong đó `key_type` có thể là:
 
 ```text
 law_id_article_no
 law_title_article_no
 ```
 
-Key nÃªn Ä‘Æ°á»£c normalize á»•n Ä‘á»‹nh, vÃ­ dá»¥:
+Key nên được normalize ổn định, ví dụ:
 
 ```text
 {normalized_law_id}::{normalized_article_no}
@@ -1926,7 +1926,7 @@ key
 article_idx
 ```
 
-Trong Ä‘Ã³ `key` lÃ  mÃ£ tÃ i khoáº£n káº¿ toÃ¡n hoáº·c account pattern Ä‘Ã£ extract.
+Trong đó `key` là mã tài khoản kế toán hoặc account pattern đã extract.
 
 #### 6. `deadline_numbers.parquet`
 
@@ -1937,7 +1937,7 @@ key
 article_idx
 ```
 
-Trong Ä‘Ã³ `key` lÃ  cÃ¡c biá»ƒu thá»©c thá»i háº¡n/sá»‘ ngÃ y/sá»‘ thÃ¡ng/nÄƒm Ä‘Ã£ extract náº¿u logic hiá»‡n táº¡i Ä‘Ã£ cÃ³.
+Trong đó `key` là các biểu thức thời hạn/số ngày/số tháng/năm đã extract nếu logic hiện tại đã có.
 
 #### 7. `sanction_terms.parquet`
 
@@ -1948,7 +1948,7 @@ key
 article_idx
 ```
 
-Trong Ä‘Ã³ `key` lÃ  term/amount/pattern liÃªn quan xá»­ pháº¡t náº¿u logic hiá»‡n táº¡i Ä‘Ã£ cÃ³.
+Trong đó `key` là term/amount/pattern liên quan xử phạt nếu logic hiện tại đã có.
 
 #### 8. `metadata.json`
 
@@ -1969,11 +1969,11 @@ Required fields:
 }
 ```
 
-Sá»‘ rows pháº£i ghi Ä‘Ãºng theo artifact thá»±c táº¿.
+Số rows phải ghi đúng theo artifact thực tế.
 
-### Function/API cáº§n cÃ³
+### Function/API cần có
 
-Trong `backend/indexing/build_exact_index.py`, táº¡o hoáº·c sá»­a function:
+Trong `backend/indexing/build_exact_index.py`, tạo hoặc sửa function:
 
 ```python
 def build_exact_index(
@@ -1986,21 +1986,21 @@ def build_exact_index(
     ...
 ```
 
-YÃªu cáº§u:
+Yêu cầu:
 
 ```text
-input_path default = data/processed/legal_articles.parquet tá»« settings/path config náº¿u cÃ³.
+input_path default = data/processed/legal_articles.parquet từ settings/path config nếu có.
 output_dir default = data/processed/exact_index.
-Náº¿u recreate=True thÃ¬ xÃ³a hoáº·c overwrite output_dir an toÃ n.
-write_legacy_json=False máº·c Ä‘á»‹nh Ä‘á»ƒ trÃ¡nh táº¡o láº¡i file JSON 1.9GB náº¿u khÃ´ng cáº§n.
-Náº¿u write_legacy_json=True thÃ¬ cÃ³ thá»ƒ táº¡o exact_index.json backward-compatible.
+Nếu recreate=True thì xóa hoặc overwrite output_dir an toàn.
+write_legacy_json=False mặc định để tránh tạo lại file JSON 1.9GB nếu không cần.
+Nếu write_legacy_json=True thì có thể tạo exact_index.json backward-compatible.
 ```
 
-Náº¿u hiá»‡n táº¡i code Ä‘Ã£ cÃ³ `build_exact_index()` signature khÃ¡c, hÃ£y giá»¯ backward compatibility náº¿u há»£p lÃ½, nhÆ°ng Æ°u tiÃªn runtime artifact má»›i.
+Nếu hiện tại code đã có `build_exact_index()` signature khác, hãy giữ backward compatibility nếu hợp lý, nhưng ưu tiên runtime artifact mới.
 
-### Runtime helper optional nhÆ°ng khuyáº¿n nghá»‹
+### Runtime helper optional nhưng khuyến nghị
 
-Náº¿u phÃ¹ há»£p, táº¡o helper class nháº¹:
+Nếu phù hợp, tạo helper class nhẹ:
 
 ```python
 class ExactIndexStore:
@@ -2020,11 +2020,11 @@ class ExactIndexStore:
         ...
 ```
 
-KhÃ´ng báº¯t buá»™c pháº£i tá»‘i Æ°u báº±ng DuckDB ngay, nhÆ°ng náº¿u dÃ¹ng DuckDB Ä‘á»ƒ query Parquet lazy Ä‘Æ°á»£c thÃ¬ cÃ ng tá»‘t. KhÃ´ng Ä‘Æ°á»£c load toÃ n bá»™ `exact_index.json` trong runtime helper.
+Không bắt buộc phải tối ưu bằng DuckDB ngay, nhưng nếu dùng DuckDB để query Parquet lazy được thì càng tốt. Không được load toàn bộ `exact_index.json` trong runtime helper.
 
-### Files dá»± kiáº¿n sá»­a/táº¡o
+### Files dự kiến sửa/tạo
 
-CÃ³ thá»ƒ sá»­a/táº¡o:
+Có thể sửa/tạo:
 
 ```text
 backend/indexing/build_exact_index.py
@@ -2032,9 +2032,9 @@ tests/test_build_exact_index.py
 scripts/02_build_exact_index.py
 ```
 
-Náº¿u Ä‘Ã£ cÃ³ file tÆ°Æ¡ng á»©ng, cáº­p nháº­t thay vÃ¬ táº¡o duplicate.
+Nếu đã có file tương ứng, cập nhật thay vì tạo duplicate.
 
-KhÃ´ng sá»­a:
+Không sửa:
 
 ```text
 backend/indexing/build_bm25_index.py
@@ -2042,12 +2042,12 @@ backend/indexing/build_vector_index.py
 backend/retrieval/*
 ```
 
-trá»« khi tháº­t sá»± cáº§n cáº­p nháº­t import nhá» vÃ  pháº£i bÃ¡o rÃµ trÆ°á»›c.
+trừ khi thật sự cần cập nhật import nhỏ và phải báo rõ trước.
 
 ### Acceptance Criteria
 
-* [ ] `build_exact_index(recreate=True)` táº¡o Ä‘Æ°á»£c thÆ° má»¥c `data/processed/exact_index/`.
-* [ ] Táº¡o Ä‘á»§ cÃ¡c files:
+* [ ] `build_exact_index(recreate=True)` tạo được thư mục `data/processed/exact_index/`.
+* [ ] Tạo đủ các files:
 
   * `articles.parquet`
   * `by_law_id.parquet`
@@ -2057,39 +2057,39 @@ trá»« khi tháº­t sá»± cáº§n cáº­p nháº­t import nhá» vÃ 
   * `deadline_numbers.parquet`
   * `sanction_terms.parquet`
   * `metadata.json`
-* [ ] `articles.parquet` cÃ³ `article_idx` integer unique.
-* [ ] `articles.parquet` cÃ³ `article_id` unique.
-* [ ] `articles.parquet` khÃ´ng chá»©a `article_text`.
-* [ ] Inverted indexes dÃ¹ng `article_idx`, khÃ´ng dÃ¹ng láº·p `article_id`.
-* [ ] `relevant_doc_string` Ä‘Ãºng format `law_id|law_title`.
-* [ ] `relevant_article_string` Ä‘Ãºng format `law_id|law_title|article_no`.
-* [ ] `by_article_no.parquet` cho phÃ©p má»™t key map nhiá»u `article_idx`.
-* [ ] `by_law_article.parquet` há»— trá»£ cáº£ key theo law_id + article_no vÃ  law_title + article_no.
-* [ ] `metadata.json` ghi Ä‘Ãºng row counts.
-* [ ] KhÃ´ng gá»i OpenSearch/Qdrant/LLM.
-* [ ] KhÃ´ng cháº¡y lá»‡nh thay tÃ´i.
+* [ ] `articles.parquet` có `article_idx` integer unique.
+* [ ] `articles.parquet` có `article_id` unique.
+* [ ] `articles.parquet` không chứa `article_text`.
+* [ ] Inverted indexes dùng `article_idx`, không dùng lặp `article_id`.
+* [ ] `relevant_doc_string` đúng format `law_id|law_title`.
+* [ ] `relevant_article_string` đúng format `law_id|law_title|article_no`.
+* [ ] `by_article_no.parquet` cho phép một key map nhiều `article_idx`.
+* [ ] `by_law_article.parquet` hỗ trợ cả key theo law_id + article_no và law_title + article_no.
+* [ ] `metadata.json` ghi đúng row counts.
+* [ ] Không gọi OpenSearch/Qdrant/LLM.
+* [ ] Không chạy lệnh thay tôi.
 
-### Test cáº§n thÃªm/cáº­p nháº­t
+### Test cần thêm/cập nhật
 
-Táº¡o/cáº­p nháº­t `tests/test_build_exact_index.py`.
+Tạo/cập nhật `tests/test_build_exact_index.py`.
 
-Test tá»‘i thiá»ƒu dÃ¹ng fixture nhá», khÃ´ng dÃ¹ng full corpus:
+Test tối thiểu dùng fixture nhỏ, không dùng full corpus:
 
-1. Build exact index tá»« fixture `legal_articles.parquet` nhá».
-2. Output Ä‘á»§ files.
-3. `articles.parquet` khÃ´ng cÃ³ `article_text`.
+1. Build exact index từ fixture `legal_articles.parquet` nhỏ.
+2. Output đủ files.
+3. `articles.parquet` không có `article_text`.
 4. `article_idx` unique.
 5. `article_id` unique.
-6. `relevant_doc_string` Ä‘Ãºng.
-7. `relevant_article_string` Ä‘Ãºng.
-8. `by_law_article` lookup Ä‘Æ°á»£c Ä‘Ãºng article theo law_id + article_no.
-9. `by_law_article` lookup Ä‘Æ°á»£c Ä‘Ãºng article theo law_title + article_no.
-10. `by_article_no` cÃ³ thá»ƒ tráº£ nhiá»u article cho cÃ¹ng â€œÄiá»u 1â€.
-11. `metadata.json` cÃ³ `format_version = exact_index_parquet_v1`.
+6. `relevant_doc_string` đúng.
+7. `relevant_article_string` đúng.
+8. `by_law_article` lookup được đúng article theo law_id + article_no.
+9. `by_law_article` lookup được đúng article theo law_title + article_no.
+10. `by_article_no` có thể trả nhiều article cho cùng “Điều 1”.
+11. `metadata.json` có `format_version = exact_index_parquet_v1`.
 
-### Lá»‡nh tÃ´i sáº½ tá»± cháº¡y
+### Lệnh tôi sẽ tự chạy
 
-Sau khi báº¡n code xong, tÃ´i sáº½ cháº¡y:
+Sau khi bạn code xong, tôi sẽ chạy:
 
 ```bash
 pytest tests/test_build_exact_index.py -q
@@ -2144,37 +2144,37 @@ PY
 
 Expected:
 
-* `articles` khoáº£ng 1,015,680 rows.
-* `article_id unique` = sá»‘ rows.
-* `article_idx unique` = sá»‘ rows.
+* `articles` khoảng 1,015,680 rows.
+* `article_id unique` = số rows.
+* `article_idx unique` = số rows.
 * `has article_text: False`.
-* CÃ¡c inverted index cÃ³ columns gá»“m `key`, `article_idx`, vÃ  thÃªm `key_type` náº¿u cáº§n.
-* Tá»•ng size thÆ° má»¥c `exact_index/` pháº£i nhá» hÆ¡n Ä‘Ã¡ng ká»ƒ so vá»›i `exact_index.json` 1.9GB.
+* Các inverted index có columns gồm `key`, `article_idx`, và thêm `key_type` nếu cần.
+* Tổng size thư mục `exact_index/` phải nhỏ hơn đáng kể so với `exact_index.json` 1.9GB.
 
-### Quy trÃ¬nh lÃ m viá»‡c báº¯t buá»™c
+### Quy trình làm việc bắt buộc
 
-TrÆ°á»›c khi sá»­a code, hÃ£y bÃ¡o cÃ¡o:
+Trước khi sửa code, hãy báo cáo:
 
 ```text
-Scope báº¡n hiá»ƒu:
+Scope bạn hiểu:
 - ...
 
-Files dá»± kiáº¿n sá»­a:
+Files dự kiến sửa:
 - ...
 
-Test command tÃ´i cáº§n cháº¡y:
+Test command tôi cần chạy:
 - ...
 ```
 
-Sau Ä‘Ã³ dá»«ng vÃ  chá» tÃ´i xÃ¡c nháº­n, trá»« khi tÃ´i ghi rÃµ â€œtriá»ƒn khai luÃ´nâ€.
+Sau đó dừng và chờ tôi xác nhận, trừ khi tôi ghi rõ “triển khai luôn”.
 
-Sau khi hoÃ n thÃ nh, bÃ¡o cÃ¡o:
+Sau khi hoàn thành, báo cáo:
 
 ```text
 Files changed:
 - ...
 
-Logic thay Ä‘á»•i:
+Logic thay đổi:
 - ...
 
 Acceptance Criteria:
@@ -2182,20 +2182,20 @@ Acceptance Criteria:
 - [ ] ...
 
 Test result:
-- ChÆ°a cháº¡y â€” ngÆ°á»i dÃ¹ng cáº§n cháº¡y lá»‡nh bÃªn dÆ°á»›i.
+- Chưa chạy — người dùng cần chạy lệnh bên dưới.
 
-Risk cÃ²n láº¡i:
+Risk còn lại:
 - ...
 
-Lá»‡nh tÃ´i cáº§n cháº¡y:
+Lệnh tôi cần chạy:
 - ...
 ```
 
-## P2.T6 â€” Build indexes orchestration
+## P2.T6 — Build indexes orchestration
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P2.T6`.
+Dùng prompt: `P2.T6`.
 
 ### Deliverables
 
@@ -2206,14 +2206,14 @@ scripts/02_build_indexes.py
 ### Acceptance Criteria
 
 ```text
-[ ] Script gá»i BM25, vector, exact builders.
-[ ] CÃ³ logging tá»«ng step.
-[ ] KhÃ´ng chá»©a business logic lá»›n.
-[ ] CÃ³ option --only bm25|dense|exact náº¿u phÃ¹ há»£p.
-[ ] CÃ³ option --max-rows/sample-size náº¿u phÃ¹ há»£p.
-[ ] Legal BM25/dense orchestration dÃ¹ng legal_article_chunks.parquet.
-[ ] Exact orchestration dÃ¹ng legal_articles.parquet.
-[ ] NgÆ°á»i dÃ¹ng tá»± cháº¡y script.
+[ ] Script gọi BM25, vector, exact builders.
+[ ] Có logging từng step.
+[ ] Không chứa business logic lớn.
+[ ] Có option --only bm25|dense|exact nếu phù hợp.
+[ ] Có option --max-rows/sample-size nếu phù hợp.
+[ ] Legal BM25/dense orchestration dùng legal_article_chunks.parquet.
+[ ] Exact orchestration dùng legal_articles.parquet.
+[ ] Người dùng tự chạy script.
 ```
 
 ### User-run commands
@@ -2225,13 +2225,13 @@ python scripts/02_build_indexes.py --only exact
 ```
 
 
-# Phase 3 â€” Query Analysis
+# Phase 3 — Query Analysis
 
-## P3.T1 â€” Domain router
+## P3.T1 — Domain router
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T1`.
+Dùng prompt: `P3.T1`.
 
 ### Deliverables
 
@@ -2243,10 +2243,10 @@ tests/test_domain_router.py
 ### Acceptance Criteria
 
 ```text
-[ ] classify_domain(question) cháº¡y Ä‘Æ°á»£c.
-[ ] CÃ³ domain confidence.
-[ ] CÃ³ domain other fallback.
-[ ] KhÃ´ng hard-filter retrieval.
+[ ] classify_domain(question) chạy được.
+[ ] Có domain confidence.
+[ ] Có domain other fallback.
+[ ] Không hard-filter retrieval.
 ```
 
 ### User-run commands
@@ -2257,11 +2257,11 @@ pytest tests/test_domain_router.py -q
 
 ---
 
-## P3.T2 â€” Answer type classifier
+## P3.T2 — Answer type classifier
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T2`.
+Dùng prompt: `P3.T2`.
 
 ### Deliverables
 
@@ -2273,9 +2273,9 @@ tests/test_answer_type_classifier.py
 ### Acceptance Criteria
 
 ```text
-[ ] classify_answer_type(question) cháº¡y Ä‘Æ°á»£c.
-[ ] Nháº­n diá»‡n deadline/amount/sanction/procedure/dossier/conditions/yes_no/accounting_account.
-[ ] CÃ³ fallback general/definition/multi_part.
+[ ] classify_answer_type(question) chạy được.
+[ ] Nhận diện deadline/amount/sanction/procedure/dossier/conditions/yes_no/accounting_account.
+[ ] Có fallback general/definition/multi_part.
 ```
 
 ### User-run commands
@@ -2286,11 +2286,11 @@ pytest tests/test_answer_type_classifier.py -q
 
 ---
 
-## P3.T3 â€” Complexity detector
+## P3.T3 — Complexity detector
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T3`.
+Dùng prompt: `P3.T3`.
 
 ### Deliverables
 
@@ -2303,8 +2303,8 @@ tests/test_complexity_detector.py
 
 ```text
 [ ] Detect single_hop.
-[ ] Detect multi_hop vá»›i cÃ¡c cue: vá»«a, Ä‘á»“ng thá»i, sau Ä‘Ã³, trong khi.
-[ ] Multiple domain signals cÃ³ thá»ƒ tÄƒng multi-hop score.
+[ ] Detect multi_hop với các cue: vừa, đồng thời, sau đó, trong khi.
+[ ] Multiple domain signals có thể tăng multi-hop score.
 ```
 
 ### User-run commands
@@ -2315,11 +2315,11 @@ pytest tests/test_complexity_detector.py -q
 
 ---
 
-## P3.T4 â€” Legal entity extractor
+## P3.T4 — Legal entity extractor
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T4`.
+Dùng prompt: `P3.T4`.
 
 ### Deliverables
 
@@ -2331,11 +2331,11 @@ tests/test_legal_entity_extractor.py
 ### Acceptance Criteria
 
 ```text
-[ ] Extract Äiá»u X.
-[ ] Extract tÃªn/mÃ£ Luáº­t/Nghá»‹ Ä‘á»‹nh/ThÃ´ng tÆ° náº¿u cÃ³.
-[ ] Extract tÃ i khoáº£n káº¿ toÃ¡n.
-[ ] Extract ngÃ y/thÃ¡ng/nÄƒm/thá»i háº¡n.
-[ ] Extract má»©c tiá»n pháº¡t.
+[ ] Extract Điều X.
+[ ] Extract tên/mã Luật/Nghị định/Thông tư nếu có.
+[ ] Extract tài khoản kế toán.
+[ ] Extract ngày/tháng/năm/thời hạn.
+[ ] Extract mức tiền phạt.
 ```
 
 ### User-run commands
@@ -2346,11 +2346,11 @@ pytest tests/test_legal_entity_extractor.py -q
 
 ---
 
-## P3.T5 â€” Query expander
+## P3.T5 — Query expander
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T5`.
+Dùng prompt: `P3.T5`.
 
 ### Deliverables
 
@@ -2362,11 +2362,11 @@ tests/test_query_expander.py
 ### Acceptance Criteria
 
 ```text
-[ ] DNNVV â†” doanh nghiá»‡p nhá» vÃ  vá»«a.
-[ ] hÃ³a Ä‘Æ¡n Ä‘á» â†” hÃ³a Ä‘Æ¡n GTGT.
-[ ] cho nghá»‰ viá»‡c â†” cháº¥m dá»©t há»£p Ä‘á»“ng lao Ä‘á»™ng.
-[ ] tráº£ ná»£ trÆ°á»›c háº¡n â†” táº¥t toÃ¡n sá»›m.
-[ ] Expansion khÃ´ng lÃ m máº¥t query gá»‘c.
+[ ] DNNVV ↔ doanh nghiệp nhỏ và vừa.
+[ ] hóa đơn đỏ ↔ hóa đơn GTGT.
+[ ] cho nghỉ việc ↔ chấm dứt hợp đồng lao động.
+[ ] trả nợ trước hạn ↔ tất toán sớm.
+[ ] Expansion không làm mất query gốc.
 ```
 
 ### User-run commands
@@ -2377,11 +2377,11 @@ pytest tests/test_query_expander.py -q
 
 ---
 
-## P3.T6 â€” Analyze questions orchestration
+## P3.T6 — Analyze questions orchestration
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P3.T6`.
+Dùng prompt: `P3.T6`.
 
 ### Deliverables
 
@@ -2399,11 +2399,11 @@ data/processed/test_questions_analyzed.parquet
 ### Acceptance Criteria
 
 ```text
-[ ] 2.000 cÃ¢u cÃ³ domain.
-[ ] 2.000 cÃ¢u cÃ³ answer_type.
-[ ] 2.000 cÃ¢u cÃ³ complexity.
-[ ] CÃ³ legal_entities_json.
-[ ] CÃ³ expanded_queries_json.
+[ ] 2.000 câu có domain.
+[ ] 2.000 câu có answer_type.
+[ ] 2.000 câu có complexity.
+[ ] Có legal_entities_json.
+[ ] Có expanded_queries_json.
 ```
 
 ### User-run commands
@@ -2420,13 +2420,13 @@ PY
 
 ---
 
-# Phase 4 â€” Hybrid Retrieval Baseline
+# Phase 4 — Hybrid Retrieval Baseline
 
-## P4.T1 â€” BM25 retriever
+## P4.T1 — BM25 retriever
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T1`.
+Dùng prompt: `P4.T1`.
 
 ### Deliverables
 
@@ -2437,15 +2437,15 @@ backend/retrieval/bm25_retriever.py
 ### Acceptance Criteria
 
 ```text
-[ ] search_legal_articles() thá»±c cháº¥t search trÃªn legal_article_chunks_bm25.
+[ ] search_legal_articles() thực chất search trên legal_article_chunks_bm25.
 [ ] search_phapdien().
 [ ] search_anle().
 [ ] Return normalized RetrievalHit objects.
-[ ] KhÃ´ng tráº£ raw OpenSearch response trá»±c tiáº¿p cho táº§ng trÃªn.
-[ ] Legal BM25 hit pháº£i return canonical article_id.
-[ ] chunk_id chá»‰ náº±m trong metadata.
-[ ] Náº¿u nhiá»u chunk cÃ¹ng article_id, retriever hoáº·c fusion layer pháº£i dedup/group vá» article_id.
-[ ] KhÃ´ng expose chunk_id nhÆ° citation id.
+[ ] Không trả raw OpenSearch response trực tiếp cho tầng trên.
+[ ] Legal BM25 hit phải return canonical article_id.
+[ ] chunk_id chỉ nằm trong metadata.
+[ ] Nếu nhiều chunk cùng article_id, retriever hoặc fusion layer phải dedup/group về article_id.
+[ ] Không expose chunk_id như citation id.
 ```
 
 ### User-run commands
@@ -2454,17 +2454,17 @@ backend/retrieval/bm25_retriever.py
 python - <<'PY'
 from backend.retrieval.bm25_retriever import BM25Retriever
 r = BM25Retriever()
-hits = r.search_legal_articles("doanh nghiá»‡p nhá» vÃ  vá»«a", top_k=5)
+hits = r.search_legal_articles("doanh nghiệp nhỏ và vừa", top_k=5)
 print(hits[:2])
 PY
 ```
 
 ---
-## P4.T2 â€” Dense retriever
+## P4.T2 — Dense retriever
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T2`.
+Dùng prompt: `P4.T2`.
 
 ### Deliverables
 
@@ -2475,15 +2475,15 @@ backend/retrieval/dense_retriever.py
 ### Acceptance Criteria
 
 ```text
-[ ] search_legal_articles_dense() thá»±c cháº¥t search trÃªn legal_article_chunks_dense.
+[ ] search_legal_articles_dense() thực chất search trên legal_article_chunks_dense.
 [ ] search_phapdien_dense().
 [ ] search_anle_dense().
-[ ] DÃ¹ng VNLegalLALEmbedder.encode_query().
+[ ] Dùng VNLegalLALEmbedder.encode_query().
 [ ] Return normalized RetrievalHit objects.
-[ ] Legal dense hit pháº£i return canonical article_id.
-[ ] chunk_id chá»‰ náº±m trong metadata.
-[ ] Náº¿u nhiá»u chunk cÃ¹ng article_id, retriever hoáº·c fusion layer pháº£i dedup/group vá» article_id.
-[ ] KhÃ´ng expose chunk_id nhÆ° citation id.
+[ ] Legal dense hit phải return canonical article_id.
+[ ] chunk_id chỉ nằm trong metadata.
+[ ] Nếu nhiều chunk cùng article_id, retriever hoặc fusion layer phải dedup/group về article_id.
+[ ] Không expose chunk_id như citation id.
 ```
 
 ### User-run commands
@@ -2492,23 +2492,23 @@ backend/retrieval/dense_retriever.py
 python - <<'PY'
 from backend.retrieval.dense_retriever import DenseRetriever
 r = DenseRetriever()
-hits = r.search_legal_articles_dense("doanh nghiá»‡p nhá» vÃ  vá»«a", top_k=5)
+hits = r.search_legal_articles_dense("doanh nghiệp nhỏ và vừa", top_k=5)
 print(hits[:2])
 PY
 ```
 
 ---
-## P4.T3 â€” Exact retriever
+## P4.T3 — Exact retriever
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T3`.
+Dùng prompt: `P4.T3`.
 
 ### Note
 
-- Runtime chÃ­nh dÃ¹ng exact_index.duckdb.
-- exact_index.json chá»‰ legacy/debug náº¿u cÃ²n.
-- Strong law_id_article_no match khÃ´ng append fallback article_no_only/law_id_only.
+- Runtime chính dùng exact_index.duckdb.
+- exact_index.json chỉ legacy/debug nếu còn.
+- Strong law_id_article_no match không append fallback article_no_only/law_id_only.
 
 ### Deliverables
 
@@ -2519,9 +2519,9 @@ backend/retrieval/exact_retriever.py
 ### Acceptance Criteria
 
 ```text
-[ ] Detect Äiá»u X trong question.
-[ ] Detect mÃ£ vÄƒn báº£n náº¿u cÃ³.
-[ ] Detect tÃ i khoáº£n káº¿ toÃ¡n náº¿u cÃ³.
+[ ] Detect Điều X trong question.
+[ ] Detect mã văn bản nếu có.
+[ ] Detect tài khoản kế toán nếu có.
 [ ] Return canonical LegalArticle candidate IDs.
 ```
 
@@ -2531,17 +2531,17 @@ backend/retrieval/exact_retriever.py
 python - <<'PY'
 from backend.retrieval.exact_retriever import ExactRetriever
 r = ExactRetriever("data/processed/exact_index.duckdb")
-print(r.search("Theo Äiá»u 4 Luáº­t Há»— trá»£ DNNVV thÃ¬ sao?", top_k=5))
+print(r.search("Theo Điều 4 Luật Hỗ trợ DNNVV thì sao?", top_k=5))
 PY
 ```
 
 ---
 
-## P4.T4 â€” Phapdien retriever + mapper
+## P4.T4 — Phapdien retriever + mapper
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T4`.
+Dùng prompt: `P4.T4`.
 
 ### Deliverables
 
@@ -2553,9 +2553,9 @@ backend/retrieval/phapdien_retriever.py
 
 ```text
 [ ] Search phapdien BM25/dense hits.
-[ ] Map phapdien_id sang legal_article_id báº±ng phapdien_to_vbpl_map.
-[ ] KhÃ´ng return phapdien article_title lÃ m citation.
-[ ] CÃ³ mapping_score trong output.
+[ ] Map phapdien_id sang legal_article_id bằng phapdien_to_vbpl_map.
+[ ] Không return phapdien article_title làm citation.
+[ ] Có mapping_score trong output.
 ```
 
 ### User-run commands
@@ -2564,18 +2564,18 @@ backend/retrieval/phapdien_retriever.py
 python - <<'PY'
 from backend.retrieval.phapdien_retriever import PhapdienMappedRetriever
 r = PhapdienMappedRetriever()
-hits = r.search_and_map("há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a", top_k=5)
+hits = r.search_and_map("hỗ trợ doanh nghiệp nhỏ và vừa", top_k=5)
 print(hits[:2])
 PY
 ```
 
 ---
 
-## P4.T5 â€” RRF fusion
+## P4.T5 — RRF fusion
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T5`.
+Dùng prompt: `P4.T5`.
 
 ### Deliverables
 
@@ -2587,11 +2587,11 @@ tests/test_fusion.py
 ### Acceptance Criteria
 
 ```text
-[ ] reciprocal_rank_fusion() Ä‘Ãºng cÃ´ng thá»©c.
+[ ] reciprocal_rank_fusion() đúng công thức.
 [ ] Merge duplicate article_id.
-[ ] CÃ³ source contribution.
-[ ] CÃ³ score_boost() tÃ¡ch riÃªng.
-[ ] CÃ³ pytest cho RRF.
+[ ] Có source contribution.
+[ ] Có score_boost() tách riêng.
+[ ] Có pytest cho RRF.
 ```
 
 ### User-run commands
@@ -2602,11 +2602,11 @@ pytest tests/test_fusion.py -q
 
 ---
 
-## P4.T6 â€” Article selector
+## P4.T6 — Article selector
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T6`.
+Dùng prompt: `P4.T6`.
 
 ### Deliverables
 
@@ -2624,8 +2624,8 @@ tests/test_article_selector.py
 [ ] sanction max 6.
 [ ] conditions/obligations max 8.
 [ ] multi_hop max 12.
-[ ] CÃ³ dedup.
-[ ] KhÃ´ng chá»n article dÆ°á»›i threshold quÃ¡ tháº¥p náº¿u cÃ³ score.
+[ ] Có dedup.
+[ ] Không chọn article dưới threshold quá thấp nếu có score.
 ```
 
 ### User-run commands
@@ -2636,11 +2636,11 @@ pytest tests/test_article_selector.py -q
 
 ---
 
-## P4.T7 â€” Hybrid retrieval orchestrator
+## P4.T7 — Hybrid retrieval orchestrator
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T7`.
+Dùng prompt: `P4.T7`.
 
 ### Deliverables
 
@@ -2651,14 +2651,14 @@ backend/retrieval/hybrid_retrieval.py
 ### Acceptance Criteria
 
 ```text
-[ ] Gá»i BM25 legal.
-[ ] Gá»i dense legal.
-[ ] Gá»i exact.
-[ ] Gá»i phapdien mapped.
+[ ] Gọi BM25 legal.
+[ ] Gọi dense legal.
+[ ] Gọi exact.
+[ ] Gọi phapdien mapped.
 [ ] RRF fusion.
 [ ] Article selection.
 [ ] Output selected canonical LegalArticle IDs.
-[ ] KhÃ´ng dÃ¹ng LLM.
+[ ] Không dùng LLM.
 ```
 
 ### User-run commands
@@ -2667,18 +2667,18 @@ backend/retrieval/hybrid_retrieval.py
 python - <<'PY'
 from backend.retrieval.hybrid_retrieval import HybridLegalRetriever
 r = HybridLegalRetriever()
-res = r.retrieve("Doanh nghiá»‡p nhá» vÃ  vá»«a Ä‘Æ°á»£c há»— trá»£ nhá»¯ng gÃ¬?")
+res = r.retrieve("Doanh nghiệp nhỏ và vừa được hỗ trợ những gì?")
 print(res)
 PY
 ```
 
 ---
 
-## P4.T8 â€” Run retrieval script
+## P4.T8 — Run retrieval script
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P4.T8`.
+Dùng prompt: `P4.T8`.
 
 ### Deliverables
 
@@ -2695,11 +2695,11 @@ data/outputs/retrieval_results.jsonl
 ### Acceptance Criteria
 
 ```text
-[ ] Script Ä‘á»c test_questions_analyzed.parquet.
+[ ] Script đọc test_questions_analyzed.parquet.
 [ ] Ghi retrieval_results.jsonl.
-[ ] Má»—i row cÃ³ id, question, selected_articles.
-[ ] selected_articles chá»‰ chá»©a canonical article IDs.
-[ ] CÃ³ logging tiáº¿n Ä‘á»™.
+[ ] Mỗi row có id, question, selected_articles.
+[ ] selected_articles chỉ chứa canonical article IDs.
+[ ] Có logging tiến độ.
 ```
 
 ### User-run commands
@@ -2711,13 +2711,13 @@ head -n 3 data/outputs/retrieval_results.jsonl
 
 ---
 
-# Phase 5 â€” QA Generation + Submission
+# Phase 5 — QA Generation + Submission
 
-## P5.T1 â€” LLM client
+## P5.T1 — LLM client
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T1`.
+Dùng prompt: `P5.T1`.
 
 ### Deliverables
 
@@ -2731,8 +2731,8 @@ backend/infrastructure/gen_llm_models/qwen_client.py
 ```text
 [ ] Client configurable endpoint/model.
 [ ] temperature default = 0.
-[ ] CÃ³ timeout/retry cÆ¡ báº£n.
-[ ] KhÃ´ng gá»i LLM á»Ÿ import-time.
+[ ] Có timeout/retry cơ bản.
+[ ] Không gọi LLM ở import-time.
 ```
 
 ### User-run commands
@@ -2746,11 +2746,11 @@ PY
 
 ---
 
-## P5.T2 â€” Answer templates + prompt
+## P5.T2 — Answer templates + prompt
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T2`.
+Dùng prompt: `P5.T2`.
 
 ### Deliverables
 
@@ -2762,13 +2762,13 @@ backend/prompts/legal_qa_prompt.txt
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ template general.
-[ ] CÃ³ template deadline.
-[ ] CÃ³ template sanction.
-[ ] CÃ³ template procedure/dossier.
-[ ] CÃ³ template yes_no.
-[ ] Prompt yÃªu cáº§u chá»‰ dÃ¹ng selected_articles.
-[ ] Prompt yÃªu cáº§u nháº¯c Äiá»u X.
+[ ] Có template general.
+[ ] Có template deadline.
+[ ] Có template sanction.
+[ ] Có template procedure/dossier.
+[ ] Có template yes_no.
+[ ] Prompt yêu cầu chỉ dùng selected_articles.
+[ ] Prompt yêu cầu nhắc Điều X.
 ```
 
 ### User-run commands
@@ -2776,17 +2776,17 @@ backend/prompts/legal_qa_prompt.txt
 ```bash
 python - <<'PY'
 from backend.qa.answer_templates import build_answer_prompt
-print(build_answer_prompt(question="CÃ¢u há»i test", articles=[], answer_type="general")[:500])
+print(build_answer_prompt(question="Câu hỏi test", articles=[], answer_type="general")[:500])
 PY
 ```
 
 ---
 
-## P5.T3 â€” Answer generator
+## P5.T3 — Answer generator
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T3`.
+Dùng prompt: `P5.T3`.
 
 ### Deliverables
 
@@ -2797,11 +2797,11 @@ backend/qa/answer_generator.py
 ### Acceptance Criteria
 
 ```text
-[ ] Input gá»“m question, selected_articles, answer_type.
-[ ] Build context tá»« selected_articles.
-[ ] Gá»i LLM client.
-[ ] KhÃ´ng sinh relevant_docs/relevant_articles.
-[ ] CÃ³ fallback náº¿u selected_articles rá»—ng.
+[ ] Input gồm question, selected_articles, answer_type.
+[ ] Build context từ selected_articles.
+[ ] Gọi LLM client.
+[ ] Không sinh relevant_docs/relevant_articles.
+[ ] Có fallback nếu selected_articles rỗng.
 ```
 
 ### User-run commands
@@ -2815,11 +2815,11 @@ PY
 
 ---
 
-## P5.T4 â€” Citation postprocess
+## P5.T4 — Citation postprocess
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T4`.
+Dùng prompt: `P5.T4`.
 
 ### Deliverables
 
@@ -2831,10 +2831,10 @@ tests/test_citation_postprocess.py
 ### Acceptance Criteria
 
 ```text
-[ ] Kiá»ƒm tra answer cÃ³ nháº¯c Äiá»u X Ä‘Ã£ chá»n.
-[ ] Append "CÄƒn cá»© phÃ¡p lÃ½" náº¿u thiáº¿u.
-[ ] KhÃ´ng thÃªm Äiá»u ngoÃ i selected_articles.
-[ ] CÃ³ pytest.
+[ ] Kiểm tra answer có nhắc Điều X đã chọn.
+[ ] Append "Căn cứ pháp lý" nếu thiếu.
+[ ] Không thêm Điều ngoài selected_articles.
+[ ] Có pytest.
 ```
 
 ### User-run commands
@@ -2845,11 +2845,11 @@ pytest tests/test_citation_postprocess.py -q
 
 ---
 
-## P5.T5 â€” Submission builder
+## P5.T5 — Submission builder
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T5`.
+Dùng prompt: `P5.T5`.
 
 ### Deliverables
 
@@ -2863,14 +2863,14 @@ tests/test_submission_validation.py
 ### Acceptance Criteria
 
 ```text
-[ ] results.json lÃ  JSON list.
-[ ] Má»—i item cÃ³ id, question, answer, relevant_docs, relevant_articles.
-[ ] relevant_docs derive tá»« selected_articles.
-[ ] relevant_articles derive tá»« canonical LegalArticle.
+[ ] results.json là JSON list.
+[ ] Mỗi item có id, question, answer, relevant_docs, relevant_articles.
+[ ] relevant_docs derive từ selected_articles.
+[ ] relevant_articles derive từ canonical LegalArticle.
 [ ] Validate duplicate id.
 [ ] Validate format relevant_docs.
 [ ] Validate format relevant_articles.
-[ ] Zip chá»‰ chá»©a results.json á»Ÿ root.
+[ ] Zip chỉ chứa results.json ở root.
 ```
 
 ### User-run commands
@@ -2881,11 +2881,11 @@ pytest tests/test_submission_validation.py -q
 
 ---
 
-## P5.T6 â€” QA + submission scripts
+## P5.T6 — QA + submission scripts
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P5.T6`.
+Dùng prompt: `P5.T6`.
 
 ### Deliverables
 
@@ -2898,11 +2898,11 @@ scripts/07_validate_submission.py
 ### Acceptance Criteria
 
 ```text
-[ ] generate_answers Ä‘á»c retrieval_results.jsonl.
-[ ] build_submission táº¡o results.json.
-[ ] validate_submission kiá»ƒm tra schema/format.
-[ ] Scripts khÃ´ng chá»©a business logic lá»›n.
-[ ] NgÆ°á»i dÃ¹ng tá»± cháº¡y scripts.
+[ ] generate_answers đọc retrieval_results.jsonl.
+[ ] build_submission tạo results.json.
+[ ] validate_submission kiểm tra schema/format.
+[ ] Scripts không chứa business logic lớn.
+[ ] Người dùng tự chạy scripts.
 ```
 
 ### User-run commands
@@ -2916,13 +2916,13 @@ ls -lh data/outputs/results.json data/outputs/submission.zip
 
 ---
 
-# Phase 6 â€” Evaluation + Error Analysis
+# Phase 6 — Evaluation + Error Analysis
 
-## P6.T1 â€” Metrics
+## P6.T1 — Metrics
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P6.T1`.
+Dùng prompt: `P6.T1`.
 
 ### Deliverables
 
@@ -2939,7 +2939,7 @@ tests/test_metrics.py
 [ ] f2_score().
 [ ] hit_at_k().
 [ ] mrr().
-[ ] CÃ³ pytest.
+[ ] Có pytest.
 ```
 
 ### User-run commands
@@ -2950,11 +2950,11 @@ pytest tests/test_metrics.py -q
 
 ---
 
-## P6.T2 â€” Error analysis report
+## P6.T2 — Error analysis report
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P6.T2`.
+Dùng prompt: `P6.T2`.
 
 ### Deliverables
 
@@ -2965,10 +2965,10 @@ backend/evaluation/error_analysis.py
 ### Acceptance Criteria
 
 ```text
-[ ] Táº¡o low_confidence_questions.csv.
-[ ] Táº¡o retrieval_debug_report.csv.
-[ ] CÃ³ error categories chuáº©n.
-[ ] KhÃ´ng cáº§n labels váº«n táº¡o report mÃ´ táº£ Ä‘Æ°á»£c.
+[ ] Tạo low_confidence_questions.csv.
+[ ] Tạo retrieval_debug_report.csv.
+[ ] Có error categories chuẩn.
+[ ] Không cần labels vẫn tạo report mô tả được.
 ```
 
 ### User-run commands
@@ -2980,24 +2980,24 @@ print("error analysis import ok")
 PY
 ```
 
-## P6.R3 â€” Detect unsupported citations in generated answers
+## P6.R3 — Detect unsupported citations in generated answers
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P6.R3`.
+Dùng prompt: `P6.R3`.
 
-### Bá»‘i cáº£nh
+### Bối cảnh
 
-Sau khi cháº¡y `generated_answers_v2_merged.jsonl`, há»‡ thá»‘ng Ä‘Ã£ xá»­ lÃ½ xong lá»—i `empty_article_text`, nhÆ°ng váº«n phÃ¡t hiá»‡n má»™t sá»‘ cÃ¢u tráº£ lá»i cÃ³ dáº¥u hiá»‡u LLM viá»‡n dáº«n Ä‘iá»u/vÄƒn báº£n khÃ´ng náº±m trong `selected_articles`.
+Sau khi chạy `generated_answers_v2_merged.jsonl`, hệ thống đã xử lý xong lỗi `empty_article_text`, nhưng vẫn phát hiện một số câu trả lời có dấu hiệu LLM viện dẫn điều/văn bản không nằm trong `selected_articles`.
 
-VÃ­ dá»¥ lá»—i cáº§n báº¯t:
+Ví dụ lỗi cần bắt:
 
 ```text
-Answer nháº¯c: Äiá»u 27, Nghá»‹ Ä‘á»‹nh 65/2023/NÄ-CP
-NhÆ°ng selected_articles chá»‰ cÃ³ Äiá»u 31 vÃ  Äiá»u 95 cá»§a 65/2023/NÄ-CP
+Answer nhắc: Điều 27, Nghị định 65/2023/NĐ-CP
+Nhưng selected_articles chỉ có Điều 31 và Điều 95 của 65/2023/NĐ-CP
 ```
 
-ÄÃ¢y lÃ  lá»—i cháº¥t lÆ°á»£ng quan trá»ng vÃ¬ validator hiá»‡n táº¡i má»›i kiá»ƒm tra schema/format, chÆ°a kiá»ƒm tra viá»‡c answer cÃ³ dÃ¹ng cÄƒn cá»© ngoÃ i context hay khÃ´ng.
+Đây là lỗi chất lượng quan trọng vì validator hiện tại mới kiểm tra schema/format, chưa kiểm tra việc answer có dùng căn cứ ngoài context hay không.
 
 ### Deliverables
 
@@ -3011,18 +3011,18 @@ tests/test_error_analysis.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ hÃ m phÃ¡t hiá»‡n citation trong answer dáº¡ng Äiá»u X + mÃ£/tÃªn vÄƒn báº£n.
-[ ] So sÃ¡nh citation Ä‘Æ°á»£c nháº¯c trong answer vá»›i selected_articles.
-[ ] Náº¿u answer nháº¯c Äiá»u/VÄƒn báº£n khÃ´ng náº±m trong selected_articles thÃ¬ flag unsupported_citation_in_answer.
-[ ] KhÃ´ng flag cÃ¡c citation yáº¿u chá»‰ cÃ³ â€œÄiá»u Xâ€ nhÆ°ng khÃ´ng cÃ³ mÃ£/tÃªn vÄƒn báº£n rÃµ rÃ ng, Ä‘á»ƒ trÃ¡nh false positive.
-[ ] Táº¡o unsupported_citations_report.csv.
-[ ] Bá»• sung unsupported_citation_in_answer vÃ o low_confidence_questions.csv.
-[ ] Summary cá»§a build_error_analysis_report cÃ³ unsupported_citations_report_path.
-[ ] KhÃ´ng gá»i LLM.
-[ ] KhÃ´ng cháº¡y láº¡i retrieval.
-[ ] KhÃ´ng sinh láº¡i QA.
-[ ] KhÃ´ng sá»­a submission builder/validator.
-[ ] CÃ³ pytest.
+[ ] Có hàm phát hiện citation trong answer dạng Điều X + mã/tên văn bản.
+[ ] So sánh citation được nhắc trong answer với selected_articles.
+[ ] Nếu answer nhắc Điều/Văn bản không nằm trong selected_articles thì flag unsupported_citation_in_answer.
+[ ] Không flag các citation yếu chỉ có “Điều X” nhưng không có mã/tên văn bản rõ ràng, để tránh false positive.
+[ ] Tạo unsupported_citations_report.csv.
+[ ] Bổ sung unsupported_citation_in_answer vào low_confidence_questions.csv.
+[ ] Summary của build_error_analysis_report có unsupported_citations_report_path.
+[ ] Không gọi LLM.
+[ ] Không chạy lại retrieval.
+[ ] Không sinh lại QA.
+[ ] Không sửa submission builder/validator.
+[ ] Có pytest.
 ```
 
 ### User-run commands
@@ -3071,15 +3071,182 @@ else:
     print("unsupported_citations_report.csv not found")
 PY
 ```
+
+## P6.R3.1 — Tighten unsupported citation extraction
+
+### Status
+
+```text
+DONE / UNIT TEST VERIFIED / FULL REPORT VERIFIED
+```
+
+### Context
+
+Sau khi triển khai `P6.R3 — Detect unsupported citations in generated answers`, report ban đầu phát hiện số lượng lớn `unsupported_citation_in_answer`. Tuy nhiên kiểm tra thủ công cho thấy nhiều dòng bị false positive do regex over-capture, kéo citation qua cả đoạn “Lưu ý...” hoặc block “Căn cứ pháp lý”.
+
+Ví dụ lỗi over-capture:
+
+```text
+Điều 144|177/2015/TT-BTC|Điều 144, Bộ luật lao động 2019). Lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp. Căn cứ pháp lý: - Điều 40 - 177/2015/TT-BTC
+```
+
+### Deliverables
+
+```text
+backend/evaluation/unsupported_citations.py
+tests/test_unsupported_citations.py
+```
+
+### Changes
+
+```text
+- Không quét toàn answer bằng regex DOTALL.
+- Tách answer thành các segment ngắn theo newline, dấu kết câu, bullet separator, marker “Căn cứ pháp lý:” và “Lưu ý”.
+- Giới hạn khoảng cách giữa “Điều X” và law_id.
+- Giới hạn raw_text citation.
+- Bỏ citation nếu raw_text chứa “Căn cứ pháp lý:” hoặc “Lưu ý”.
+- Vẫn chỉ flag citation mạnh có đủ article_no + law_id.
+- Vẫn không flag citation yếu chỉ có “Điều X”.
+```
+
+### Acceptance Criteria
+
+```text
+[x] pytest tests/test_unsupported_citations.py tests/test_error_analysis.py -q pass.
+[x] unsupported_citations_report.csv vẫn sinh được.
+[x] Không còn raw_text kéo qua “Căn cứ pháp lý:” hoặc “Lưu ý”.
+[x] unsupported_citation_in_answer giảm đáng kể so với bản P6.R3 ban đầu.
+[x] Không gọi LLM.
+[x] Không generate QA.
+[x] Không sửa retrieval/submission.
+```
+
+### Verified Result
+
+```text
+unsupported_citation_count: 82
+suspicious cross-block rows: 0
+```
+
 ---
 
-# Phase 7 â€” Reranker / LLM Verifier
-
-## P7.T1 â€” Reranker interface
+## P6.R3.2 — Fix law_id extraction edge cases
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P7.T1`.
+Dùng prompt: `P6.R3.2`.
+
+### Context
+
+Sau `P6.R3.1`, detector đã không còn over-capture qua block “Căn cứ pháp lý” / “Lưu ý”. Tuy nhiên vẫn còn một số false positive do regex/normalizer parse sai `law_id`.
+
+Ví dụ lỗi cần sửa:
+
+```text
+Quyết định 1727/2007/QĐ-UBND
+bị extract thành:
+727/2007/QĐ-UBND
+```
+
+```text
+Quyết định 4688/2004/QĐ-UBND
+bị extract thành:
+688/2004/QĐ-UBND
+```
+
+```text
+Điều 36/2005/QH11
+bị hiểu nhầm thành:
+article_no = Điều 3
+law_id = 6/2005/QH11
+```
+
+### Deliverables
+
+```text
+backend/evaluation/unsupported_citations.py
+tests/test_unsupported_citations.py
+```
+
+### Acceptance Criteria
+
+```text
+[ ] Không cắt mất chữ số đầu của mã văn bản có 3–4 chữ số trước năm, ví dụ 1727/2007/QĐ-UBND, 4688/2004/QĐ-UBND, 1231/1998/QĐ-UB.
+[ ] Không parse nhầm chuỗi “Điều 36/2005/QH11” thành article_no = Điều 3 và law_id = 6/2005/QH11.
+[ ] Vẫn parse đúng các citation chuẩn như “Điều 27, Nghị định 65/2023/NĐ-CP”.
+[ ] Vẫn parse đúng “Điều 10 của Thông tư 01/2007/TT-BKHCN”.
+[ ] Vẫn không flag citation yếu chỉ có “Điều X”.
+[ ] Không gọi LLM.
+[ ] Không generate QA.
+[ ] Không sửa retrieval/submission.
+[ ] pytest pass.
+```
+
+### User-run commands
+
+```bash
+pytest tests/test_unsupported_citations.py tests/test_error_analysis.py -q
+```
+
+```bash
+python - <<'PY'
+from backend.evaluation.error_analysis import build_error_analysis_report
+
+summary = build_error_analysis_report(
+    retrieval_results_path="data/outputs/retrieval_results.jsonl",
+    generated_answers_path="data/outputs/generated_answers_v2_merged.jsonl",
+    output_dir="data/outputs/error_analysis_v2",
+)
+print(summary)
+PY
+```
+
+```bash
+python - <<'PY'
+import pandas as pd
+from pathlib import Path
+from collections import Counter
+
+low_path = Path("data/outputs/error_analysis_v2/low_confidence_questions.csv")
+df = pd.read_csv(low_path)
+
+counter = Counter()
+for value in df["issue_categories"].fillna(""):
+    for part in str(value).replace(";", ",").replace("|", ",").split(","):
+        part = part.strip()
+        if part:
+            counter[part] += 1
+
+print("Issue counts:")
+for k, v in counter.most_common(30):
+    print(k, v)
+
+report_path = Path("data/outputs/error_analysis_v2/unsupported_citations_report.csv")
+print("\nunsupported report exists:", report_path.exists())
+
+if report_path.exists():
+    report = pd.read_csv(report_path)
+    print("unsupported report shape:", report.shape)
+
+    if not report.empty:
+        report["raw_len"] = report["unsupported_citations"].fillna("").astype(str).str.len()
+        print("\nraw_len describe:")
+        print(report["raw_len"].describe())
+
+        print("\nSample:")
+        print(report.head(20).to_string(index=False))
+PY
+```
+
+---
+
+# Phase 7 — Reranker / LLM Verifier
+
+## P7.T1 — Reranker interface
+
+### Codex Prompt
+
+Dùng prompt: `P7.T1`.
 
 ### Deliverables
 
@@ -3090,9 +3257,9 @@ backend/retrieval/reranker.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ base interface rerank(question, candidates).
-[ ] CÃ³ no-op reranker fallback.
-[ ] KhÃ´ng phÃ¡ baseline retrieval.
+[ ] Có base interface rerank(question, candidates).
+[ ] Có no-op reranker fallback.
+[ ] Không phá baseline retrieval.
 ```
 
 ### User-run commands
@@ -3106,11 +3273,11 @@ PY
 
 ---
 
-## P7.T2 â€” LLM verifier
+## P7.T2 — LLM verifier
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P7.T2`.
+Dùng prompt: `P7.T2`.
 
 ### Deliverables
 
@@ -3122,9 +3289,9 @@ backend/prompts/verifier_prompt.txt
 ### Acceptance Criteria
 
 ```text
-[ ] Verifier output JSON parse Ä‘Æ°á»£c.
-[ ] CÃ³ fallback khi JSON lá»—i.
-[ ] KhÃ´ng dÃ¹ng verifier náº¿u chÆ°a báº­t config.
+[ ] Verifier output JSON parse được.
+[ ] Có fallback khi JSON lỗi.
+[ ] Không dùng verifier nếu chưa bật config.
 ```
 
 ### User-run commands
@@ -3138,13 +3305,13 @@ PY
 
 ---
 
-# Phase 8 â€” Neo4j Graph Expansion
+# Phase 8 — Neo4j Graph Expansion
 
-## P8.T1 â€” Neo4j client
+## P8.T1 — Neo4j client
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P8.T1`.
+Dùng prompt: `P8.T1`.
 
 ### Deliverables
 
@@ -3155,10 +3322,10 @@ backend/infrastructure/graph_store/neo4j_client.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ health_check().
-[ ] CÃ³ run_read_query().
-[ ] CÃ³ run_write_query().
-[ ] KhÃ´ng connect á»Ÿ import-time.
+[ ] Có health_check().
+[ ] Có run_read_query().
+[ ] Có run_write_query().
+[ ] Không connect ở import-time.
 ```
 
 ### User-run commands
@@ -3172,11 +3339,11 @@ PY
 
 ---
 
-## P8.T2 â€” Build graph index
+## P8.T2 — Build graph index
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P8.T2`.
+Dùng prompt: `P8.T2`.
 
 ### Deliverables
 
@@ -3187,12 +3354,12 @@ backend/indexing/build_graph_index.py
 ### Acceptance Criteria
 
 ```text
-[ ] Táº¡o Law nodes.
-[ ] Táº¡o Article nodes.
-[ ] Táº¡o HAS_ARTICLE relationships.
-[ ] Táº¡o PhapdienArticle nodes náº¿u cÃ³ mapping.
-[ ] Táº¡o DERIVED_FROM relationships.
-[ ] CÃ³ constraints Cypher.
+[ ] Tạo Law nodes.
+[ ] Tạo Article nodes.
+[ ] Tạo HAS_ARTICLE relationships.
+[ ] Tạo PhapdienArticle nodes nếu có mapping.
+[ ] Tạo DERIVED_FROM relationships.
+[ ] Có constraints Cypher.
 ```
 
 ### User-run commands
@@ -3206,11 +3373,11 @@ PY
 
 ---
 
-## P8.T3 â€” Graph expander
+## P8.T3 — Graph expander
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P8.T3`.
+Dùng prompt: `P8.T3`.
 
 ### Deliverables
 
@@ -3223,8 +3390,8 @@ backend/retrieval/graph_expander.py
 ```text
 [ ] Input candidate_article_ids.
 [ ] Return neighbor_article_ids + graph_boost_scores.
-[ ] KhÃ´ng add neighbor mÃ¹ quÃ¡ng.
-[ ] CÃ³ max_neighbors config.
+[ ] Không add neighbor mù quáng.
+[ ] Có max_neighbors config.
 ```
 
 ### User-run commands
@@ -3238,13 +3405,13 @@ PY
 
 ---
 
-# Phase 9 â€” Fine-tuning Preparation
+# Phase 9 — Fine-tuning Preparation
 
-## P9.T1 â€” Reranker training data builder
+## P9.T1 — Reranker training data builder
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `P9.T1`.
+Dùng prompt: `P9.T1`.
 
 ### Deliverables
 
@@ -3256,9 +3423,9 @@ backend/evaluation/build_reranker_training_data.py
 
 ```text
 [ ] Output query, positive_article_id, hard_negative_article_ids.
-[ ] Hard negatives láº¥y tá»« retrieval logs.
-[ ] KhÃ´ng fine-tune model trong task nÃ y.
-[ ] CÃ³ validation article_id tá»“n táº¡i trong legal_articles.
+[ ] Hard negatives lấy từ retrieval logs.
+[ ] Không fine-tune model trong task này.
+[ ] Có validation article_id tồn tại trong legal_articles.
 ```
 
 ### User-run commands
@@ -3274,11 +3441,11 @@ PY
 
 # Utility Tasks
 
-## U1 â€” End-to-end baseline runner
+## U1 — End-to-end baseline runner
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `U1`.
+Dùng prompt: `U1`.
 
 ### Deliverables
 
@@ -3289,11 +3456,11 @@ scripts/run_phase_1_to_5_baseline.py
 ### Acceptance Criteria
 
 ```text
-[ ] Script gá»i láº§n lÆ°á»£t Phase 1 â†’ Phase 5.
-[ ] CÃ³ logging start/end má»—i step.
+[ ] Script gọi lần lượt Phase 1 → Phase 5.
+[ ] Có logging start/end mỗi step.
 [ ] Stop on failure.
-[ ] KhÃ´ng duplicate business logic.
-[ ] NgÆ°á»i dÃ¹ng tá»± cháº¡y.
+[ ] Không duplicate business logic.
+[ ] Người dùng tự chạy.
 ```
 
 ### User-run commands
@@ -3304,11 +3471,11 @@ python scripts/run_phase_1_to_5_baseline.py
 
 ---
 
-## U2 â€” Debug retrieval for one question
+## U2 — Debug retrieval for one question
 
 ### Codex Prompt
 
-DÃ¹ng prompt: `U2`.
+Dùng prompt: `U2`.
 
 ### Deliverables
 
@@ -3319,15 +3486,15 @@ scripts/debug_retrieval_for_question.py
 ### Acceptance Criteria
 
 ```text
-[ ] CÃ³ arg --id.
+[ ] Có arg --id.
 [ ] In question/domain/answer_type/complexity.
 [ ] In BM25 hits.
 [ ] In dense hits.
 [ ] In exact hits.
-[ ] In phapdien hits vÃ  mapped articles.
+[ ] In phapdien hits và mapped articles.
 [ ] In RRF merged candidates.
 [ ] In selected final articles.
-[ ] KhÃ´ng generate answer.
+[ ] Không generate answer.
 ```
 
 ### User-run commands
@@ -3340,34 +3507,33 @@ python scripts/debug_retrieval_for_question.py --id 1
 
 # Definition of Done chung
 
-Má»™t task chá»‰ Ä‘Æ°á»£c coi lÃ  xong khi:
+Một task chỉ được coi là xong khi:
 
 ```text
-[ ] Deliverables Ä‘Ã£ táº¡o/sá»­a Ä‘Ãºng file.
-[ ] Acceptance Criteria Ä‘Æ°á»£c Codex checklist láº¡i.
-[ ] CÃ³ lá»‡nh test/validation Ä‘á»ƒ ngÆ°á»i dÃ¹ng cháº¡y.
-[ ] KhÃ´ng cÃ³ logic vÆ°á»£t scope task.
-[ ] KhÃ´ng hard-code path.
-[ ] KhÃ´ng tá»± cháº¡y lá»‡nh thay ngÆ°á»i dÃ¹ng.
-[ ] Náº¿u cÃ³ test, pytest tÆ°Æ¡ng á»©ng pass khi ngÆ°á»i dÃ¹ng cháº¡y.
+[ ] Deliverables đã tạo/sửa đúng file.
+[ ] Acceptance Criteria được Codex checklist lại.
+[ ] Có lệnh test/validation để người dùng chạy.
+[ ] Không có logic vượt scope task.
+[ ] Không hard-code path.
+[ ] Không tự chạy lệnh thay người dùng.
+[ ] Nếu có test, pytest tương ứng pass khi người dùng chạy.
 ```
-## Workflow váº­n hÃ nh tá»« Phase 3 trá»Ÿ Ä‘i
+## Workflow vận hành từ Phase 3 trở đi
 
-- MÃ´i trÆ°á»ng code chÃ­nh: mÃ¡y Windows local.
-- MÃ´i trÆ°á»ng cháº¡y náº·ng: GX10.
-- Codex thá»±c hiá»‡n code/edit/test unit nháº¹ trÃªn Windows; ngÆ°á»i dÃ¹ng tá»± cháº¡y cÃ¡c lá»‡nh validate náº·ng trÃªn GX10 vÃ  gá»­i log láº¡i.
-- Quy trÃ¬nh khuyáº¿n nghá»‹:
-  1. Code trÃªn Windows.
-  2. Cháº¡y unit test nháº¹ trÃªn Windows náº¿u phÃ¹ há»£p.
-  3. Commit/push lÃªn branch lÃ m viá»‡c.
+- Môi trường code chính: máy Windows local.
+- Môi trường chạy nặng: GX10.
+- Codex thực hiện code/edit/test unit nhẹ trên Windows; người dùng tự chạy các lệnh validate nặng trên GX10 và gửi log lại.
+- Quy trình khuyến nghị:
+  1. Code trên Windows.
+  2. Chạy unit test nhẹ trên Windows nếu phù hợp.
+  3. Commit/push lên branch làm việc.
   4. GX10 `git pull`.
-  5. GX10 cháº¡y smoke/full validation vá»›i dá»¯ liá»‡u vÃ  index tháº­t.
-- KhÃ´ng commit generated artifacts tá»« GX10:
+  5. GX10 chạy smoke/full validation với dữ liệu và index thật.
+- Không commit generated artifacts từ GX10:
   - `data/processed/exact_index.duckdb`
   - `data/processed/exact_index.json`
   - Qdrant/OpenSearch volumes/data
   - cache, logs, temporary outputs
-- Dense/vector jobs trÃªn GX10 nÃªn cháº¡y trong NVIDIA PyTorch container. BM25 vÃ  exact DuckDB cÃ³ thá»ƒ cháº¡y ngoÃ i container náº¿u dependency Ä‘áº§y Ä‘á»§.
-- Phase 3+ pháº£i tÃ¡ch rÃµ code change vÃ  runtime validation: bÃ¡o cÃ¡o cuá»‘i cáº§n ghi lá»‡nh GX10 cáº§n cháº¡y, expected output, vÃ  tráº¡ng thÃ¡i pass/fail dá»±a trÃªn log ngÆ°á»i dÃ¹ng cung cáº¥p.
-
+- Dense/vector jobs trên GX10 nên chạy trong NVIDIA PyTorch container. BM25 và exact DuckDB có thể chạy ngoài container nếu dependency đầy đủ.
+- Phase 3+ phải tách rõ code change và runtime validation: báo cáo cuối cần ghi lệnh GX10 cần chạy, expected output, và trạng thái pass/fail dựa trên log người dùng cung cấp.
 
