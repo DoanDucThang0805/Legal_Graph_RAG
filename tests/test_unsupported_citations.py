@@ -1,4 +1,4 @@
-﻿from backend.evaluation.unsupported_citations import (
+from backend.evaluation.unsupported_citations import (
     build_supported_citation_keys,
     detect_unsupported_citations,
     extract_answer_citations,
@@ -92,8 +92,11 @@ def test_does_not_join_article_to_law_id_across_legal_basis_block() -> None:
     selected_articles = [{"law_id": "80/2021/NĐ-CP", "article_no": "Điều 4"}]
     answer = (
         "Theo Điều 16, hộ kinh doanh cần đáp ứng điều kiện. "
-        "Lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp.\n\n"
-        "Căn cứ pháp lý:\n- Điều 4 - 80/2021/NĐ-CP"
+        "Lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp.
+
+"
+        "Căn cứ pháp lý:
+- Điều 4 - 80/2021/NĐ-CP"
     )
 
     citations = extract_answer_citations(answer)
@@ -150,3 +153,67 @@ def test_near_unsupported_citation_with_comma_is_flagged() -> None:
     assert unsupported[0].law_id == "65/2023/NĐ-CP"
     assert "Lưu ý" not in unsupported[0].raw_text
     assert "Căn cứ pháp lý" not in unsupported[0].raw_text
+
+
+def test_full_four_digit_decision_id_is_supported() -> None:
+    selected_articles = [{"law_id": "1727/2007/QĐ-UBND", "article_no": "Điều 6"}]
+    answer = "Theo Điều 6 của Quyết định 1727/2007/QĐ-UBND, hồ sơ bao gồm giấy tờ cần thiết."
+
+    citations = extract_answer_citations(answer)
+
+    assert [(citation.article_no, citation.law_id) for citation in citations] == [("Điều 6", "1727/2007/QĐ-UBND")]
+    assert detect_unsupported_citations(answer, selected_articles) == []
+
+
+def test_unsupported_full_four_digit_decision_id_keeps_leading_digit() -> None:
+    selected_articles = [{"law_id": "1727/2007/QĐ-UBND", "article_no": "Điều 5"}]
+    answer = "Theo Điều 6 của Quyết định 1727/2007/QĐ-UBND, hồ sơ bao gồm giấy tờ cần thiết."
+
+    unsupported = detect_unsupported_citations(answer, selected_articles)
+
+    assert len(unsupported) == 1
+    assert unsupported[0].article_no == "Điều 6"
+    assert unsupported[0].law_id == "1727/2007/QĐ-UBND"
+    assert "727/2007/QĐ-UBND" not in unsupported[0].law_id
+
+
+def test_decision_id_4688_qd_ubnd_is_supported() -> None:
+    selected_articles = [{"law_id": "4688/2004/QĐ-UBND", "article_no": "Điều 3"}]
+    answer = "Theo Điều 3 của Quyết định 4688/2004/QĐ-UBND, thời hạn là 05 ngày."
+
+    assert detect_unsupported_citations(answer, selected_articles) == []
+    assert extract_answer_citations(answer)[0].law_id == "4688/2004/QĐ-UBND"
+
+
+def test_decision_id_1231_qd_ub_is_supported() -> None:
+    selected_articles = [{"law_id": "1231/1998/QĐ-UB", "article_no": "Điều 11"}]
+    answer = "Theo Điều 11 của Quyết định 1231/1998/QĐ-UB, hồ sơ nộp muộn được xử lý theo quy định."
+
+    assert detect_unsupported_citations(answer, selected_articles) == []
+    assert extract_answer_citations(answer)[0].law_id == "1231/1998/QĐ-UB"
+
+
+def test_malformed_article_slash_law_id_is_not_extracted() -> None:
+    selected_articles = [{"law_id": "36/2005/QH11", "article_no": "Điều 32"}]
+    answer = "Điều 36/2005/QH11 quy định về hàng hóa lưu thông trong nước."
+
+    assert extract_answer_citations(answer) == []
+    assert detect_unsupported_citations(answer, selected_articles) == []
+
+
+def test_valid_law_citation_is_supported() -> None:
+    selected_articles = [{"law_id": "36/2005/QH11", "article_no": "Điều 92"}]
+    answer = "Theo Điều 92 Luật 36/2005/QH11, thương nhân có nghĩa vụ thực hiện đúng quy định."
+
+    assert detect_unsupported_citations(answer, selected_articles) == []
+
+
+def test_valid_unsupported_law_citation_is_flagged() -> None:
+    selected_articles = [{"law_id": "36/2005/QH11", "article_no": "Điều 91"}]
+    answer = "Theo Điều 92 Luật 36/2005/QH11, thương nhân có nghĩa vụ thực hiện đúng quy định."
+
+    unsupported = detect_unsupported_citations(answer, selected_articles)
+
+    assert len(unsupported) == 1
+    assert unsupported[0].article_no == "Điều 92"
+    assert unsupported[0].law_id == "36/2005/QH11"
