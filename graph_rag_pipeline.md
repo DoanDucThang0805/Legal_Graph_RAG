@@ -40,6 +40,16 @@ flowchart LR
 
 ---
 
+## Tech Stack Lựa Chọn
+
+Dựa trên cấu hình hệ thống, Tech Stack cốt lõi cho Graph RAG được chốt như sau:
+- **Framework Điều Phối**: **LangChain** và **LangGraph** (xây dựng luồng Agentic/Routing logic).
+- **Cơ Sở Dữ Liệu**: **Neo4j** (hiện đang chạy sẵn qua Docker container) đóng vai trò hợp nhất cả Graph Database và Vector Database (sử dụng Neo4j Native Vector Index).
+- **Mô Hình Embedding**: Sử dụng **`darklethelong/vnlegal-lal`** (Model Embedding Pháp Lý tuỳ chỉnh) để sinh vector chuyên biệt cho domain Luật.
+- **Trích Xuất Quan Hệ (Phase 3)**: Sử dụng **Gemini API** kết hợp Structured Output (qua LangChain) để bóc tách các entity và quan hệ phức tạp.
+
+---
+
 ## Phase 1: Data Loading ✅
 
 > **Status**: Đã hoàn thành — `phapdien_load_dataset.py` và `anle_load_dataset.py`
@@ -221,6 +231,7 @@ VBPL_PATTERN = r'(Luật|Nghị định|Thông tư|Quyết định|Pháp lệnh)
 ```
 
 #### Lớp 2: LLM-based (cho quan hệ phức tạp)
+Sử dụng **Gemini API** kết hợp `LangChain` (Structured Output) để trích xuất các mối quan hệ ngữ nghĩa phức tạp (Ví dụ: "Sửa đổi", "Bổ sung") mà Rule-based khó xử lý.
 ```python
 prompt = """
 Trích xuất các thực thể pháp lý và quan hệ từ đoạn văn bản sau.
@@ -430,14 +441,7 @@ Sinh vector embeddings cho chunks và entities.
 
 ### Embedding Model
 
-Đề xuất cho tiếng Việt:
-
-| Model | Dim | Ghi chú |
-|-------|-----|---------|
-| `bge-m3` | 1024 | Multilingual, tốt cho VI |
-| `multilingual-e5-large` | 1024 | Mạnh cross-lingual |
-| `gte-multilingual-base` | 768 | Nhẹ hơn, vẫn tốt |
-| `Vietnamese-bi-encoder` | 768 | Chuyên cho tiếng Việt |
+Sử dụng **`darklethelong/vnlegal-lal`**. Model này được train/fine-tune chuyên biệt cho đặc thù từ vựng và cấu trúc văn bản pháp luật Việt Nam, mang lại khả năng phân biệt ngữ nghĩa (Legal Retrieval) cao hơn nhiều so với các model public general. Tích hợp trực tiếp thông qua HuggingFaceEmbeddings của Langchain.
 
 ### Prefix cho embedding
 
@@ -474,7 +478,7 @@ for i in range(0, len(chunks), BATCH_SIZE):
 > **Status**: Chưa triển khai — `index_builder.py`
 
 ### Mục tiêu
-Nạp toàn bộ graph + vectors vào Neo4j.
+Nạp toàn bộ graph + vectors vào **Neo4j Database** (hiện đang chạy sẵn qua Docker container) thông qua module `Neo4jGraph` của **LangChain**. Việc này tận dụng sức mạnh của Neo4j làm Vector Store hợp nhất.
 
 ### Thứ tự nạp (quan trọng — dependencies)
 

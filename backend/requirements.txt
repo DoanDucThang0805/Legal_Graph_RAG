@@ -1,2 +1,50 @@
-pandas
-datasets
+# =========================
+# Data Processing
+# =========================
+pandas>=2.2.0
+datasets>=3.0.0
+python-dotenv
+# =========================
+# Embedding & NLP
+# =========================
+torch>=2.3.0
+transformers>=4.53.0
+sentence-transformers>=5.0.0
+
+# =========================
+# Neo4j
+# =========================
+neo4j>=5.28.0
+langchain-neo4j>=0.4.0
+
+# =========================
+# LangChain Ecosystem
+# =========================
+langchain>=0.3.27
+langchain-core>=0.3.74
+langchain-community>=0.3.29
+langchain-huggingface>=0.3.1
+
+# =========================
+# Gemini
+# =========================
+langchain-google-genai>=2.1.10
+google-generativeai>=0.8.5
+
+# =========================
+# Agent Framework
+# =========================
+langgraph>=0.6.6
+
+# =========================
+# Structured Output
+# =========================
+instructor>=1.11.3
+pydantic>=2.11.7
+
+# =========================
+# Utilities
+# =========================
+python-dotenv>=1.1.1
+tqdm>=4.67.1
+numpy>=2.3.2
