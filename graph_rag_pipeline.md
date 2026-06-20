@@ -118,74 +118,219 @@ unified_df = loader.run()
 
 ---
 
-## Phase 2: Chunking
+## Phase 2: Chunking (Pháp Điển) ✅
 
-> **Status**: Chưa triển khai — `chunker.py`
+> **Status**: Đã hoàn thành — `phapdien_chunker.py`
 
 ### Mục tiêu
-Chia `content_text` của mỗi Điều luật thành các chunks nhỏ phù hợp cho embedding.
+Chia `content_text` của mỗi Điều luật thành các chunks nhỏ, bảo toàn ngữ nghĩa pháp lý, phù hợp cho Embedding & Vector Search.
 
 ### Input
-- `phapdien_unified.jsonl` (65,967 Điều)
+- `phapdien_unified.parquet` (65,967 Điều luật)
 
-### Chiến lược chunking cho pháp luật
+### Chiến lược: Structural-Aware Hybrid Chunking (3 tầng)
 
-#### Option A: Khoản-level chunking (Recommended)
-Pháp luật VN có cấu trúc rõ ràng: Điều → Khoản → Điểm.
-Tách theo ranh giới Khoản tự nhiên.
+Pháp luật VN tuân thủ cấu trúc nghiêm ngặt: **Điều → Khoản → Điểm**. Do đó không dùng fixed-size chunking (sẽ cắt ngang Khoản, làm mất ngữ nghĩa), mà dùng pipeline 3 tầng:
 
 ```text
-Điều 173. Tội trộm cắp tài sản
-├── Chunk 1: "1. Người nào trộm cắp tài sản của người khác..."
-├── Chunk 2: "2. Phạm tội thuộc một trong các trường hợp..."
-├── Chunk 3: "3. Phạm tội thuộc một trong các trường hợp..."
-└── Chunk 4: "4. Phạm tội thuộc một trong các trường hợp..."
+            ┌─────────────────────────────────────────────┐
+            │          Mỗi Điều luật (content_text)       │
+            └─────────────────┬───────────────────────────┘
+                              │
+                  ┌───────────▼───────────┐
+        Tầng 1:  │  Regex Split by Khoản │  Tách theo "1. ", "2. ", "3. "
+                  │  (KHOAN_PATTERN)      │  Intro merge vào Khoản 1
+                  └───────────┬───────────┘
+                              │
+                  ┌───────────▼───────────┐
+        Tầng 2:  │  Merge Khoản ngắn     │  Khoản < 80 chars → gộp
+                  │  (min_chunk_size=80)  │  vào chunk liền kề
+                  └───────────┬───────────┘
+                              │
+                  ┌───────────▼───────────┐
+        Tầng 3:  │  Split Khoản dài      │  Khoản > 1000 chars → cắt
+                  │  (RecursiveCharText)  │  bằng LangChain splitter
+                  │  overlap=150 chars    │  Giữ prefix [...Khoản X]
+                  └───────────┬───────────┘
+                              │
+                  ┌───────────▼───────────┐
+                  │  Context Enrichment   │  Mỗi chunk có embed_text
+                  │  hierarchy prefix     │  = "Topic > Subject > Chương > Điều"
+                  └───────────────────────┘
 ```
 
-Regex pattern nhận biết Khoản:
+#### Tầng 1: Regex Split by Khoản
+
+Regex tìm ranh giới Khoản ở đầu mỗi dòng:
+
 ```python
-KHOAN_PATTERN = r'(?:^|\n)(\d+)\.\s'
+KHOAN_PATTERN = re.compile(r"^([1-9]\d?)\.\s+(?=.{15,})", re.MULTILINE)
 ```
 
-#### Option B: Sliding window (Fallback)
-Cho các Điều không có cấu trúc Khoản rõ ràng.
-- chunk_size: 500-800 tokens
-- overlap: 100-150 tokens
+- `^` + `re.MULTILINE` → match đầu mỗi dòng
+- `[1-9]\d?` → số 1-99 (không match "0.")
+- `(?=.{15,})` → lookahead đảm bảo nội dung đủ dài (tránh match số thứ tự trong bảng)
 
-#### Option C: Hybrid
-- Thử tách theo Khoản trước
-- Nếu Khoản quá dài → sliding window trên Khoản đó
-- Nếu Điều không có Khoản → sliding window trên toàn Điều
+Ví dụ:
+```text
+Điều 173. Tội trộm cắp tài sản             ← Intro → merge vào Khoản 1
+├── Chunk 1: [intro + "1. Người nào..."]    ← type: "khoan"
+├── Chunk 2: "2. Phạm tội thuộc..."         ← type: "khoan"
+├── Chunk 3: "3. Phạm tội thuộc..."         ← type: "khoan"
+└── Chunk 4: "4. Phạm tội thuộc..."         ← type: "khoan"
+```
 
-### Metadata kế thừa cho mỗi Chunk
+Nếu Điều luật không có cấu trúc Khoản → giữ nguyên toàn bộ → `type: "full"`.
 
-Mỗi chunk phải mang theo metadata của Điều cha:
+#### Tầng 2: Merge Khoản ngắn
+
+Một số "Khoản" thực chất chỉ là dòng ngắn (VD: `"3. Bãi bỏ."`) → embedding kém hiệu quả.
+
+- Khoản < `min_chunk_size` (80 chars) → gộp vào chunk tiếp theo
+- Khoản cuối → gộp ngược vào chunk trước đó
+
+#### Tầng 3: Split Khoản dài
+
+Khoản > `max_chunk_size` (1000 chars) → dùng `RecursiveCharacterTextSplitter`:
+
+```python
+separators = ["\n\n", "\n", ". ", "; ", ", ", " ", ""]
+chunk_size = 1000, overlap = 150
+```
+
+Mỗi sub-chunk từ thứ 2 trở đi được thêm prefix `[...Khoản X]` để giữ context:
+```text
+Sub-chunk 1: "2. Phạm tội thuộc một trong các trường hợp sau đây..."
+Sub-chunk 2: "[...2.] thì bị phạt tù từ hai năm đến bảy năm..."
+```
+
+Sub-chunks < 10 chars (mảnh vụn từ LangChain) bị lọc bỏ tự động.
+
+### Context Enrichment (embed_text)
+
+Mỗi chunk có 2 trường text:
+- `chunk_text`: Nội dung gốc (để hiển thị cho user)
+- `embed_text`: Nội dung để embedding = **hierarchy prefix** + chunk_text
+
+```text
+embed_text = "Hình sự > Bộ luật Hình sự > Chương XVI > Điều 173"
+             + "\n"
+             + "1. Người nào trộm cắp tài sản của người khác..."
+```
+
+Thứ tự prefix: **Topic > Subject > Chương > Điều** (đúng phân cấp Pháp Điển).
+
+### Schema Output (18 trường)
 
 ```python
 {
-    "chunk_id": "doc_001_chunk_003",
-    "doc_id": "doc_001",                    # từ unified
-    "article_id": "Điều 1.1.LQ.1",         # từ unified
-    "article_title": "Điều 1. ...",         # từ unified
-    "chapter_title": "Chương I ...",        # từ unified
-    "topic_id": "...",                      # từ unified
-    "topic_title_vi": "Hiến pháp",          # từ unified
-    "subject_id": "...",                    # từ unified
-    "subject_title_vi": "Hiến pháp 2013",   # từ unified
-    "hierarchy_path": "Hiến pháp > ...",    # từ unified
-    "source_url": "https://...",            # từ unified
-
-    "chunk_index": 3,                       # mới
-    "chunk_total": 5,                       # mới
-    "chunk_text": "3. Phạm tội thuộc...",   # mới — nội dung chunk
-    "chunk_char_len": 450,                  # mới
-    "chunk_type": "khoan",                  # mới — khoan | sliding | full
+    "chunk_id": "doc_001::Điều 1.1.LQ.1::chunk::0",
+    "chunk_index": 0,
+    "chunk_total": 4,
+    "chunk_type": "khoan",       # khoan | split | full
+    "chunk_text": "1. Người nào trộm cắp...",
+    "embed_text": "Hình sự > BLHS > Chương XVI > Điều 173\n1. Người nào...",
+    "chunk_char_len": 350,
+    "chunk_word_count": 78,
+    "doc_id": "rec_abc123",
+    "article_id": "Điều 1.1.LQ.1",
+    "article_title": "Điều 173. Tội trộm cắp tài sản",
+    "chapter_title": "Chương XVI - CÁC TỘI XÂM PHẠM SỞ HỮU",
+    "topic_id": "topic_05",
+    "topic_title_vi": "Hình sự",
+    "subject_id": "subj_012",
+    "subject_title_vi": "Bộ luật Hình sự",
+    "hierarchy_path": "Hình sự > Bộ luật Hình sự > Chương XVI > Điều 173",
+    "source_url": "https://phapdien.moj.gov.vn/..."
 }
 ```
 
-### Output
-- `phapdien_chunks.jsonl` — mỗi dòng = 1 chunk
-- Dự kiến: ~150,000–200,000 chunks (65K điều × trung bình 2-3 khoản)
+### Kết quả thực tế
+
+| Metric | Giá trị |
+|--------|---------|
+| **Input** | 65,967 Điều luật |
+| **Output** | **~218,000 chunks** |
+| Chunks/Điều (TB) | 3.3 |
+| Kích thước (TB) | 375 chars / 83 từ |
+| Kích thước (median) | 281 chars / 62 từ |
+
+| Chunk Type | Số lượng | % | Ý nghĩa |
+|------------|----------|---|---------|
+| `khoan` | ~166K | 76% | Tách theo Khoản — chiến lược chính |
+| `split` | ~37K | 17% | Khoản dài bị cắt nhỏ bằng LangChain |
+| `full` | ~15K | 7% | Điều ngắn, giữ nguyên toàn bộ |
+
+### Cách chạy
+```python
+from knowledge_processing.phapdien_chunker import PhapdienChunker
+
+chunker = PhapdienChunker()
+chunks_df = chunker.run()
+```
+
+### Output files
+```text
+knowlegde_data/phapdien/
+├── phapdien_chunks.jsonl       ← ~218K chunks
+└── phapdien_chunks.parquet     ← ~97 MB (compressed)
+```
+
+---
+
+## Phase 2.5: Chunking (Án Lệ) ✅
+
+> **Status**: Đã hoàn thành — `anle_chunker.py`
+
+### Mục tiêu
+Chia nhỏ các văn bản Án Lệ (từ `anle_unified` + `anle_sentences`) thành chunks phù hợp cho Embedding & Vector Search, bảo toàn ngữ nghĩa của từng phần trọng tâm trong bản án.
+
+### Input
+- `anle_unified.parquet` (1,963 án lệ)
+- `anle_sentences.parquet` (273,379 câu đã tách sẵn)
+
+### Chiến lược: Section-Aware Chunking
+
+Án lệ là văn bản tự do, không có cấu trúc Điều/Khoản/Điểm như Pháp Điển, nhưng được chia thành các phần (Sections): Tóm tắt vụ án, Nhận định của toà án, Quyết định. 
+Chiến lược phân nhỏ tận dụng bảng `sentences` đã được xử lý sẵn:
+
+1. **Gộp câu thành đoạn (Paragraph Assembly):**
+   - Các câu (sentences) có cùng `paragraph_id` được gộp lại thành một đoạn văn hoàn chỉnh.
+2. **Gộp đoạn thành Chunk (Chunk Assembly):**
+   - Các đoạn văn liên tiếp có cùng `section_kind` (vd: `findings`, `case_summary`, `decision`) được gộp lại.
+   - Quá trình gộp dừng lại khi tổng số ký tự chạm ngưỡng `max_chunk_size` (1000 chars).
+   - Nếu một đoạn văn quá dài (vượt quá 1000 ký tự), `RecursiveCharacterTextSplitter` (LangChain) sẽ được kích hoạt để cắt đoạn đó ra cho đúng chuẩn.
+3. **Merge Short Chunks:**
+   - Các chunk quá ngắn (< 80 chars) sẽ tự động được gộp vào chunk liền kề để tránh làm loãng ngữ nghĩa.
+   - Lọc bỏ triệt để các mảnh vụn rác (< 10 chars).
+4. **Context Enrichment (embed_text):**
+   - Mỗi chunk được gắn tự động một prefix ngữ cảnh để Embedding Model hiểu rõ nguồn gốc:
+   - Cấu trúc: `[Loại vụ án] Tên bản án (Vấn đề pháp lý) | Phần: <Tên phần>`
+   - Ví dụ: `[dan_su] Bản án số: 38/2021/DS-PT (Tranh chấp hợp đồng đặt cọc) | Phần: Nhận định của Toà án`
+
+### Kết quả thực tế
+
+| Metric | Giá trị |
+|--------|---------|
+| **Input** | 1,963 Án lệ / 273,379 Câu |
+| **Output** | **52,406 chunks** |
+| Kích thước chunk (TB) | 702 chars |
+| Kích thước chunk (median) | 779 chars |
+
+| Chunk Type | Số lượng | Ý nghĩa |
+|------------|----------|---------|
+| `case_summary` | 31,814 | Tóm tắt vụ án |
+| `findings` | 16,341 | Nhận định của Toà án (Phần lõi quan trọng nhất) |
+| `decision` | 4,251 | Quyết định của Toà án |
+
+*(Lưu ý: Header và Footer của bản án được lược bỏ do không mang nhiều giá trị tra cứu).*
+
+### Output files
+```text
+knowlegde_data/anle/
+├── anle_chunks.jsonl       ← 52K chunks
+└── anle_chunks.parquet     ← Compressed, Typed Data
+```
 
 ---
 
