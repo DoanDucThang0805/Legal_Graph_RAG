@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.qa.answer_generator import AnswerGenerator
+from backend.qa.answer_templates import build_answer_prompt
 from backend.qa.article_context_loader import load_selected_article_contexts
 from backend.qa.citation_postprocess import postprocess_citations
 
@@ -84,17 +85,32 @@ def generate_answers_for_subset(
                 max_article_chars=max_article_chars,
                 max_total_context_chars=max_total_context_chars,
             )
+            question = _safe_text(record.get("question"))
+            answer_type = _safe_text(record.get("answer_type")) or "general"
+            prompt_preview = build_answer_prompt(
+                question=question,
+                articles=selected_articles,
+                answer_type=answer_type,
+            )
             logger.info(
-                "Regenerating subset answer id=%s selected_articles=%d hydrated_articles=%d",
+                "Regenerating subset answer id=%s selected_articles=%d hydrated_articles=%d "
+                "max_total_context_chars=%s max_article_chars=%s max_tokens=%s "
+                "total_context_chars=%d allowed_citation_count=%d prompt_chars=%d",
                 record_id,
                 len(selected_article_ids),
                 len(selected_articles),
+                max_total_context_chars,
+                max_article_chars,
+                max_tokens,
+                _count_article_text_chars(selected_articles),
+                len(selected_articles),
+                len(prompt_preview),
             )
 
             answer = generator.generate_answer(
-                question=_safe_text(record.get("question")),
+                question=question,
                 selected_articles=selected_articles,
-                answer_type=_safe_text(record.get("answer_type")) or "general",
+                answer_type=answer_type,
                 max_tokens=max_tokens,
             )
             answer = postprocess_citations(answer, selected_articles)
@@ -184,6 +200,10 @@ def _extract_selected_article_ids(record: dict[str, Any]) -> list[str]:
         elif isinstance(article, dict) and article.get("article_id"):
             article_ids.append(str(article["article_id"]))
     return article_ids
+
+
+def _count_article_text_chars(articles: list[dict[str, Any]]) -> int:
+    return sum(len(str(article.get("article_text") or "")) for article in articles if isinstance(article, dict))
 
 
 def _safe_text(value: Any) -> str:
