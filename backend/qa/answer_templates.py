@@ -18,6 +18,9 @@ Nguyên tắc bắt buộc:
 - Chỉ dùng căn cứ pháp lý được cung cấp trong selected_articles/context.
 - Không sử dụng kiến thức ngoài context.
 - Không tự sinh hoặc đoán citation.
+- Chỉ được viện dẫn cặp Điều + Văn bản nếu cặp đó xuất hiện trong danh sách căn cứ được phép hoặc context được cung cấp.
+- Không tự suy đoán số điều, số nghị định, số thông tư, số luật hoặc mã văn bản.
+- Không nêu citation yếu kiểu "theo Điều X" nếu không rõ văn bản tương ứng trong context.
 - Không tự sinh relevant_docs.
 - Không tự sinh relevant_articles.
 - Khi trả lời phải nhắc rõ Điều X và tên/mã văn bản nếu có trong context.
@@ -60,6 +63,7 @@ def build_answer_prompt(
     """Build a grounded legal QA prompt from selected canonical articles."""
 
     normalized_question = str(question or "").strip()
+    allowed_citations = _format_allowed_citations(articles)
     article_context = _format_articles_context(articles)
     guidance = ANSWER_TYPE_GUIDANCE.get(answer_type, ANSWER_TYPE_GUIDANCE["general"])
     base_prompt = _load_base_prompt()
@@ -74,15 +78,20 @@ def build_answer_prompt(
             "Câu hỏi:",
             normalized_question,
             "",
+            "CÁC CĂN CỨ ĐƯỢC PHÉP VIỆN DẪN:",
+            allowed_citations,
+            "",
             "selected_articles/context:",
             article_context,
             "",
             "Yêu cầu đầu ra:",
             "- Kết luận trực tiếp trước.",
             "- Dựa hoàn toàn trên selected_articles/context ở trên.",
-            "- Nhắc rõ Điều X và tên/mã văn bản khi viện dẫn.",
+            "- Chỉ viện dẫn Điều + Văn bản có trong danh sách căn cứ được phép.",
+            "- Nhắc rõ Điều X và tên/mã văn bản khi viện dẫn; không viết citation yếu nếu thiếu văn bản tương ứng.",
             "- Không tạo relevant_docs hoặc relevant_articles trong câu trả lời.",
             "- Không viện dẫn điều luật/văn bản không có trong context.",
+            "- Nếu context không đủ căn cứ, nói rõ không đủ căn cứ trong tài liệu được cung cấp.",
             "- Kết thúc bằng lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp.",
         ]
     )
@@ -114,6 +123,42 @@ def _format_articles_context(articles: list) -> str:
     return "\n\n".join(formatted_articles)
 
 
+def _format_allowed_citations(articles: list) -> str:
+    if not articles:
+        return (
+            "[Không có căn cứ được phép]\n"
+            "Không được viện dẫn Điều/Văn bản cụ thể. Hãy nói rõ không đủ căn cứ pháp lý được cung cấp."
+        )
+
+    formatted_citations = [
+        _format_single_allowed_citation(index=index, article=article)
+        for index, article in enumerate(articles, start=1)
+    ]
+    return "\n\n".join(formatted_citations)
+
+
+def _format_single_allowed_citation(index: int, article: Any) -> str:
+    article_id = _get_article_value(article, "article_id")
+    law_id = _get_article_value(article, "law_id")
+    law_title = _get_article_value(article, "law_title")
+    article_no = _get_article_value(article, "article_no")
+    citation = _format_citation_display(
+        article_no=article_no,
+        law_title=law_title,
+        law_id=law_id,
+    )
+
+    return "\n".join(
+        [
+            f"[A{index}] article_id={article_id}",
+            f"     law_id={law_id}",
+            f"     law_title={law_title}",
+            f"     article_no={article_no}",
+            f"     citation={citation}",
+        ]
+    )
+
+
 def _format_single_article(index: int, article: Any) -> str:
     article_id = _get_article_value(article, "article_id")
     law_id = _get_article_value(article, "law_id")
@@ -127,7 +172,7 @@ def _format_single_article(index: int, article: Any) -> str:
 
     return "\n".join(
         [
-            f"[Căn cứ {index}]",
+            f"[A{index}] selected_article_context",
             f"article_id: {article_id}",
             f"Văn bản: {law_display}",
             f"Điều: {article_no}",
@@ -136,6 +181,15 @@ def _format_single_article(index: int, article: Any) -> str:
             article_text,
         ]
     )
+
+
+def _format_citation_display(article_no: str, law_title: str, law_id: str) -> str:
+    citation_text = _join_non_empty([article_no, law_title], separator=", ")
+    if not law_id:
+        return citation_text
+    if not citation_text:
+        return law_id
+    return f"{citation_text} ({law_id})"
 
 
 def _get_article_value(article: Any, field_name: str) -> str:

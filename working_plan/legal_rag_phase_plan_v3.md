@@ -1,4 +1,4 @@
-# Legal Graph RAG — Phase & Task Plan v3.1
+﻿# Legal Graph RAG — Phase & Task Plan v3.1
 
 > File liên quan trực tiếp: `codex_task_prompts_vi_v3.md`  
 > Bản cập nhật: Phase 2 dùng `legal_article_chunks.parquet` cho BM25/vector; Neo4j ở Phase 8.  
@@ -3238,8 +3238,356 @@ if report_path.exists():
 PY
 ```
 
----
+## P6.R4 — Harden QA prompt against unsupported citations
 
+### Status
+
+```text
+NOT STARTED
+```
+
+### Context
+
+Sau P6.R3.2, detector `unsupported_citation_in_answer` đã được tighten và fix edge cases law_id. Báo cáo hiện tại ghi nhận:
+
+```text
+unsupported_citation_in_answer: 76
+```
+
+Nhóm lỗi này phản ánh các trường hợp answer body có viện dẫn mạnh dạng `Điều X + law_id/law_title`, nhưng cặp citation đó không nằm trong `selected_articles`.
+
+P6.R4 tập trung harden tầng QA prompt / answer generation input formatting để giảm khả năng LLM tự sinh citation ngoài context.
+
+### Goal
+
+```text
+Giảm unsupported_citation_in_answer bằng prompt guardrails và allowed citation formatting.
+```
+
+### Deliverables
+
+Bắt buộc:
+
+```text
+backend/prompts/legal_qa_prompt.txt
+```
+
+Có thể sửa nếu cần:
+
+```text
+backend/qa/answer_generator.py
+```
+
+Có thể thêm/sửa test nhẹ nếu phù hợp:
+
+```text
+tests/test_answer_generator.py
+tests/test_qa_prompt_guardrails.py
+```
+
+### Acceptance Criteria
+
+```text
+[ ] Prompt yêu cầu LLM chỉ trả lời dựa trên selected_articles/context được cung cấp.
+[ ] Prompt cấm LLM tự viện dẫn Điều/Văn bản ngoài selected_articles.
+[ ] Prompt cấm tự suy đoán số điều, số nghị định, số thông tư, số luật từ kiến thức ngoài.
+[ ] Nếu thiếu căn cứ trong context, answer phải nói không đủ căn cứ thay vì tự bổ sung citation.
+[ ] Nếu cần, AnswerGenerator bổ sung allowed citation list deterministic từ selected article contexts.
+[ ] Allowed citation list chỉ được build từ selected_articles, không thêm article_id mới.
+[ ] Không sửa retrieval pipeline.
+[ ] Không sửa article selector.
+[ ] Không sửa submission schema.
+[ ] Không gọi Phase 7 reranker/verifier.
+[ ] Không dùng Neo4j/Phase 8.
+[ ] Không generate lại full 2000 QA trong task này.
+```
+
+### User-run commands
+
+Import smoke:
+
+```bash
+python - <<'PY'
+from backend.qa.answer_generator import AnswerGenerator
+print("answer generator import ok")
+PY
+```
+
+Nếu có thêm/sửa test:
+
+```bash
+pytest tests/test_answer_generator.py -q
+```
+
+hoặc:
+
+```bash
+pytest tests/test_qa_prompt_guardrails.py -q
+```
+
+### Validation after implementation
+
+Sau khi P6.R4 code/prompt được cập nhật, không chạy lại full 2000 ngay.
+
+Bước validation khuyến nghị:
+
+```text
+1. Regenerate QA cho subset 76 unsupported citation cases.
+2. Build temporary generated_answers file cho subset hoặc merge subset output vào bản copy.
+3. Chạy lại error analysis.
+4. So sánh unsupported_citation_in_answer trước/sau.
+```
+
+Expected comparison target:
+
+```text
+Before P6.R4:
+unsupported_citation_in_answer: 76
+
+After P6.R4 subset validation:
+unsupported_citation_in_answer nên giảm trên subset 76.
+```
+
+Không claim P6.R4 VERIFIED nếu chưa có log validation từ user.
+
+### Technical Notes
+
+```text
+P6.R4 chỉ harden QA prompt / answer generation input.
+Không thay đổi selected_articles.
+Không thay đổi relevant_docs / relevant_articles.
+Không thay đổi canonical article_id.
+Không thêm citation ngoài legal_articles canonical.
+Không để Phapdien/anle tự sinh citation chính thức.
+Không implement reranker/verifier trong task này.
+Không implement Neo4j graph expansion trong task này.
+```
+
+### Follow-up
+
+Sau P6.R4, bước tiếp theo hợp lý là:
+
+```text
+1. Regenerate subset 76 unsupported citation cases.
+2. Re-run error analysis.
+3. Nếu unsupported citation giảm ổn định, cân nhắc full QA regeneration.
+4. Sau đó mới xử lý P6.R5 — Analyze too_many_selected_articles / retrieval noise.
+```
+
+
+## 2. P6.R4.V1
+
+Dùng prompt này để yêu cầu Codex viết bước subset validation, không chạy full 2000:
+
+```text
+Bạn đang làm việc trong repo Legal_Graph_RAG.
+
+Ngôn ngữ trao đổi: tiếng Việt.
+
+Task hiện tại:
+
+P6.R4.V1 — Regenerate subset 76 unsupported citation cases and re-run error analysis
+
+Bối cảnh:
+
+P6.R4 đã implemented và unit test nhẹ đã pass.
+
+Files changed ở P6.R4:
+- backend/prompts/legal_qa_prompt.txt
+- backend/qa/answer_templates.py
+- tests/test_answer_generator.py
+
+Test đã pass:
+
+python - <<'PY'
+from backend.qa.answer_generator import AnswerGenerator
+print("answer generator import ok")
+PY
+
+pytest tests/test_answer_generator.py -q
+
+Observed:
+answer generator import ok
+2 passed in 0.03s
+
+Current baseline files:
+- data/outputs/generated_answers_v2_merged.jsonl
+- data/outputs/results_v2.json
+- data/outputs/submission_v2.zip
+- data/outputs/error_analysis_v2/
+- data/outputs/error_analysis_v2/unsupported_citations_report.csv
+
+Current issue counts before P6.R4 subset validation:
+- legacy_or_unknown_law_id: 231
+- too_many_selected_articles: 216
+- unsupported_citation_in_answer: 76
+- answer_maybe_truncated: 53
+- answer_insufficient_basis: 3
+
+Mục tiêu:
+
+Tạo quy trình an toàn để regenerate QA chỉ cho subset 76 câu đang có unsupported_citation_in_answer, sau đó merge vào bản copy của generated_answers_v2_merged.jsonl và chạy lại error analysis để so sánh trước/sau.
+
+Không được chạy full 2000.
+Không được sửa retrieval.
+Không được sửa selector.
+Không được sửa submission schema.
+Không được dùng Phase 7.
+Không được dùng Neo4j.
+Không được claim VERIFIED nếu user chưa chạy lệnh và cung cấp log.
+
+Yêu cầu:
+
+1. Inspect code hiện có:
+- scripts/05_generate_answers.py
+- backend/qa/answer_generator.py
+- backend/qa/answer_templates.py
+- backend/evaluation/error_analysis.py
+- data/outputs/error_analysis_v2/unsupported_citations_report.csv structure nếu cần
+
+2. Nếu script generate hiện có đã hỗ trợ filter theo IDs hoặc input subset:
+- Không tạo script mới.
+- Chỉ hướng dẫn user chạy bằng options hiện có.
+
+3. Nếu script hiện chưa hỗ trợ subset IDs:
+- Tạo script nhỏ, scoped rõ, ví dụ:
+  scripts/regenerate_unsupported_citation_subset.py
+
+Script này chỉ làm nhiệm vụ:
+- Đọc data/outputs/error_analysis_v2/unsupported_citations_report.csv.
+- Lấy unique question ids từ report.
+- Regenerate answer cho đúng các ids đó bằng pipeline QA hiện có.
+- Ghi output subset ra file mới, không overwrite baseline.
+
+Output đề xuất:
+- data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+
+4. Nếu cần script merge:
+Có thể tạo script nhỏ:
+- scripts/merge_generated_answer_subset.py
+
+Hoặc nếu codebase đã có merge utility thì dùng lại.
+
+Yêu cầu merge:
+- Input baseline: data/outputs/generated_answers_v2_merged.jsonl
+- Input subset: data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+- Output merged copy: data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
+- Replace theo id.
+- Không làm mất id nào.
+- Output phải đủ 2000 rows.
+- Không overwrite generated_answers_v2_merged.jsonl.
+
+5. Sau merge, user sẽ tự chạy error analysis với:
+- retrieval_results_path=data/outputs/retrieval_results.jsonl
+- generated_answers_path=data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
+- output_dir=data/outputs/error_analysis_v2_p6r4
+
+6. Nếu thêm script/test thì có test nhẹ:
+- Kiểm tra merge không mất id.
+- Kiểm tra duplicate id được xử lý đúng.
+- Kiểm tra output row count giữ nguyên.
+
+Deliverables có thể có:
+- scripts/regenerate_unsupported_citation_subset.py
+- scripts/merge_generated_answer_subset.py
+- tests/test_merge_generated_answer_subset.py
+
+Không tạo deliverables nếu code hiện có đã đáp ứng.
+
+User-run commands mong muốn:
+
+1. Regenerate subset 76:
+python scripts/regenerate_unsupported_citation_subset.py \
+  --unsupported-report data/outputs/error_analysis_v2/unsupported_citations_report.csv \
+  --retrieval-results data/outputs/retrieval_results.jsonl \
+  --output data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+
+2. Merge subset vào bản copy:
+python scripts/merge_generated_answer_subset.py \
+  --base data/outputs/generated_answers_v2_merged.jsonl \
+  --subset data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl \
+  --output data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
+
+3. Chạy error analysis:
+python - <<'PY'
+from backend.evaluation.error_analysis import build_error_analysis_report
+
+summary = build_error_analysis_report(
+    retrieval_results_path="data/outputs/retrieval_results.jsonl",
+    generated_answers_path="data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl",
+    output_dir="data/outputs/error_analysis_v2_p6r4",
+)
+print(summary)
+PY
+
+4. Inspect issue counts:
+python - <<'PY'
+import pandas as pd
+from collections import Counter
+from pathlib import Path
+
+low_path = Path("data/outputs/error_analysis_v2_p6r4/low_confidence_questions.csv")
+df = pd.read_csv(low_path)
+
+counter = Counter()
+for value in df["issue_categories"].fillna(""):
+    for part in str(value).replace(";", ",").replace("|", ",").split(","):
+        part = part.strip()
+        if part:
+            counter[part] += 1
+
+print("Issue counts:")
+for k, v in counter.most_common(30):
+    print(k, v)
+
+report_path = Path("data/outputs/error_analysis_v2_p6r4/unsupported_citations_report.csv")
+print("\nunsupported report exists:", report_path.exists())
+if report_path.exists():
+    report = pd.read_csv(report_path)
+    print("unsupported report shape:", report.shape)
+    print(report.head(20).to_string(index=False))
+PY
+
+Acceptance Criteria:
+
+[ ] Chỉ regenerate subset ids lấy từ unsupported_citations_report.csv.
+[ ] Không chạy full 2000 generation.
+[ ] Không overwrite generated_answers_v2_merged.jsonl.
+[ ] Output subset jsonl được ghi riêng.
+[ ] Output merged-for-eval jsonl giữ đủ 2000 rows.
+[ ] Error analysis output ghi vào thư mục mới error_analysis_v2_p6r4.
+[ ] Có thể so sánh unsupported_citation_in_answer trước/sau.
+[ ] Không sửa retrieval.
+[ ] Không sửa selector.
+[ ] Không sửa submission schema.
+[ ] Không dùng Phase 7.
+[ ] Không dùng Neo4j.
+
+Output báo cáo của Codex cần theo format:
+
+P6.R4.V1 — Regenerate subset 76 unsupported citation cases
+
+Files changed:
+- ...
+
+What changed:
+- ...
+
+Scope control:
+- Không sửa retrieval.
+- Không sửa selector.
+- Không sửa submission schema.
+- Không dùng Phase 7.
+- Không dùng Neo4j.
+- Không chạy full 2000.
+
+User-run commands:
+```bash
+
+```
+
+
+---
 # Phase 7 — Reranker / LLM Verifier
 
 ## P7.T1 — Reranker interface
