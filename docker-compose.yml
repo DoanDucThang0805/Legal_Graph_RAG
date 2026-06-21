@@ -14,5 +14,57 @@ services:
     volumes:
       - neo4j_data:/data
 
+  # ---------------------------------------------------------------------------
+  # vLLM serving Qwen3-14B (OpenAI-compatible API) — Lớp 2 trích xuất Phase 3.
+  # Nằm trong profile "llm" để BẬT/TẮT độc lập với Neo4j:
+  #     Bật:  docker compose --profile llm up -d vllm     (hoặc: make vllm-up)
+  #     Tắt:  docker compose --profile llm down vllm       (hoặc: make vllm-down)
+  # GB10 (Grace Blackwell, aarch64, sm_120): xem deploy/vllm/README.md để chọn
+  # image ARM64 + Blackwell phù hợp (VLLM_IMAGE trong .env).
+  # ---------------------------------------------------------------------------
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    container_name: vllm-qwen3
+    profiles: ["llm"]
+
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+
+    environment:
+      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN:-}"
+      HF_HOME: /root/.cache/huggingface
+      VLLM_LOGGING_LEVEL: "INFO"
+
+    volumes:
+      # Tái dùng HF cache trên host → không tải lại Qwen3-14B (~28GB) mỗi lần.
+      - "${HF_CACHE_DIR:-/root/.cache/huggingface}:/root/.cache/huggingface"
+
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen3-14B}
+      --served-model-name ${VLLM_SERVED_NAME:-qwen3-14b}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-8192}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.85}
+      --enable-prefix-caching
+      --port 8000
+
+    ipc: host
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    healthcheck:
+      # Dùng python (luôn có trong image vLLM) để khỏi phụ thuộc curl.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 1200s   # lần đầu phải tải + load model 14B
+
 volumes:
   neo4j_data:

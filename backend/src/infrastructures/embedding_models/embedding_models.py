@@ -14,13 +14,29 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# vnlegal-lal là model Qwen3-Embedding: 1024 chiều, last-token pooling,
+# max 2048 token. Theo model card:
+#   - QUERY  → BẮT BUỘC thêm instruction prefix dưới đây.
+#   - PASSAGE/document → KHÔNG thêm prefix, encode raw text.
+# Tham khảo: https://huggingface.co/darklethelong/vnlegal-lal
+QUERY_INSTRUCTION = (
+    "Instruct: Given a Vietnamese legal question, retrieve relevant legal "
+    "passages that answer the question\nQuery: "
+)
+MAX_SEQ_LENGTH = 2048
+
 
 class LegalEmbeddingModel:
     """
     Wrapper cho model embedding pháp lý tiếng Việt.
 
     Mặc định:
-        darklethelong/vnlegal-lal
+        darklethelong/vnlegal-lal (Qwen3-Embedding, 1024-dim, last-token pooling)
+
+    Lưu ý quan trọng:
+        - QUERY phải có instruction prefix (xem ``QUERY_INSTRUCTION``);
+          ``embed_query`` tự động thêm. PASSAGE thì không.
+        - Giới hạn 2048 token (tokenizer config báo nhầm 512 — bỏ qua).
 
     Tương thích:
         - LangChain
@@ -35,6 +51,7 @@ class LegalEmbeddingModel:
         model_name: str = "darklethelong/vnlegal-lal",
         device: str | None = None,
         batch_size: int = 64,
+        max_seq_length: int = MAX_SEQ_LENGTH,
     ):
         if HuggingFaceEmbeddings is None:
             raise ImportError(
@@ -63,6 +80,13 @@ class LegalEmbeddingModel:
             },
         )
 
+        # Ép max_seq_length = 2048 đúng model card (tokenizer config báo nhầm 512).
+        try:
+            self.embeddings.client.max_seq_length = max_seq_length
+            logger.info(f"max_seq_length set = {max_seq_length}")
+        except Exception as e:
+            logger.warning(f"Không set được max_seq_length: {e}")
+
         # Kiểm tra dimension
         try:
             dim = len(self.embed_query("kiểm tra kích thước vector"))
@@ -72,18 +96,23 @@ class LegalEmbeddingModel:
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """
-        Embed danh sách document/chunk.
+        Embed danh sách document/chunk (passage).
 
-        Không thêm prefix query:/passage:
-        vì VNLegal-LAL không yêu cầu.
+        KHÔNG thêm instruction prefix — theo model card vnlegal-lal, passage
+        được encode ở dạng raw text. Khi index chunk, truyền vào trường
+        ``embed_text`` (đã chứa sẵn context prefix phân cấp).
         """
         return self.embeddings.embed_documents(texts)
 
     def embed_query(self, text: str) -> List[float]:
         """
         Embed câu hỏi người dùng.
+
+        BẮT BUỘC thêm instruction prefix chuẩn Qwen3-Embedding:
+        ``"Instruct: ...\\nQuery: <câu hỏi>"``. Thiếu prefix này chất lượng
+        retrieval giảm rõ rệt (query và passage lệch không gian biểu diễn).
         """
-        return self.embeddings.embed_query(text)
+        return self.embeddings.embed_query(f"{QUERY_INSTRUCTION}{text}")
 
     def embedding_dimension(self) -> int:
         """

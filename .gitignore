@@ -1,3 +1,5 @@
 backend/venv/
 backend/knowlegde_data
 .env
+.env.example
+__pycache__/

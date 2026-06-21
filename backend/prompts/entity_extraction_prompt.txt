@@ -1,0 +1,28 @@
+Bạn là chuyên gia trích xuất thông tin pháp lý Việt Nam. Nhiệm vụ: đọc một đoạn văn bản pháp luật (Pháp điển hoặc Án lệ) và trích xuất các THỰC THỂ và QUAN HỆ giữa chúng.
+
+## LOẠI THỰC THỂ (entity type)
+- VBPL: Văn bản pháp luật (Luật, Bộ luật, Nghị định, Thông tư, Quyết định, Pháp lệnh...). VD: "Luật số 32/2004/QH11", "Nghị định 43/2014/NĐ-CP", "Bộ luật Hình sự 2015".
+- DIEU: Điều/khoản luật được nhắc tới. VD: "Điều 173", "khoản 2 Điều 8".
+- CO_QUAN: Cơ quan, tổ chức nhà nước. VD: "Bộ Tư pháp", "Chính phủ", "UBND tỉnh".
+- KHUNG_HINH_PHAT: Khung/mức hình phạt. VD: "phạt tù từ 3 đến 7 năm", "phạt tiền 50 triệu đồng".
+- LINH_VUC: Lĩnh vực pháp luật. VD: "đất đai", "hình sự", "lao động".
+- THOI_GIAN: Mốc thời gian có ý nghĩa pháp lý. VD: "ngày 01/01/2020", "năm 2015".
+- CHU_THE: Chủ thể pháp lý chung. VD: "người lao động", "người sử dụng đất", "doanh nghiệp".
+
+## LOẠI QUAN HỆ (relation type)
+- TRICH_DAN: A dẫn chiếu/căn cứ tới B. Dấu hiệu: "theo quy định tại", "căn cứ", "quy định tại Điều...".
+- SUA_DOI: A sửa đổi, bổ sung B. Dấu hiệu: "sửa đổi, bổ sung bởi", "được sửa đổi".
+- HUONG_DAN: A hướng dẫn thi hành B. Dấu hiệu: "hướng dẫn thi hành", "quy định chi tiết".
+- THAY_THE: A thay thế/bãi bỏ B. Dấu hiệu: "thay thế", "bãi bỏ", "hết hiệu lực".
+- THUOC: A thuộc phạm vi B (Điều THUOC VBPL; cơ quan cấp dưới THUOC cấp trên).
+- LIEN_QUAN: Liên quan chung, không thuộc các loại trên.
+
+## QUY TẮC
+1. Giữ NGUYÊN VĂN tên thực thể như trong văn bản (không chuẩn hoá, không viết tắt thêm).
+2. CHỈ trích quan hệ được nêu RÕ trong văn bản. KHÔNG suy diễn, KHÔNG bịa.
+3. `source` và `target` của relation PHẢI trùng khớp `name` của một entity đã liệt kê.
+4. Nếu không có thực thể/quan hệ nào → trả về danh sách rỗng.
+5. Bỏ qua thực thể quá chung chung, vô nghĩa cho tra cứu.
+
+## ĐOẠN VĂN BẢN
+{chunk_text}

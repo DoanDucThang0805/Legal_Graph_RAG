@@ -49,3 +49,12 @@ pydantic>=2.11.7
 python-dotenv>=1.1.1
 tqdm>=4.67.1
 numpy>=2.3.2
+
+# =========================
+# LLM Serving (Lớp 2 — Phase 3)
+# =========================
+# vLLM chạy trong Docker (service "vllm"), không cần cài trong venv app.
+# openai SDK dùng để gọi vLLM qua OpenAI-compatible API + guided JSON.
+openai>=1.40.0
+# vllm  # chỉ cần nếu muốn chạy vLLM trực tiếp trong venv thay vì Docker
+vllm

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -38,6 +39,17 @@ logger = logging.getLogger(__name__)
 
 # Các section quan trọng cho RAG (bỏ qua header/footer vì ít giá trị ngữ nghĩa)
 IMPORTANT_SECTIONS = {"case_summary", "findings", "decision"}
+
+# Dấu câu/khoảng trắng thừa ở đầu đoạn (do tách câu lệch dấu chấm hoặc do
+# RecursiveCharacterTextSplitter cắt ngay sau separator ". "). Không mang ngữ
+# nghĩa nên strip để embed_text sạch hơn. Lưu ý KHÔNG strip "[" để giữ marker
+# đánh số đoạn dạng "[1]", "[2]" trong phần Nhận định.
+_LEADING_NOISE = re.compile(r"^[\s.;,:]+")
+
+
+def _clean_lead(text: str) -> str:
+    """Loại bỏ dấu câu/khoảng trắng thừa ở đầu chuỗi."""
+    return _LEADING_NOISE.sub("", text).strip()
 
 
 class AnleChunker:
@@ -97,7 +109,10 @@ class AnleChunker:
         ):
             # Sắp xếp theo index_in_paragraph để giữ đúng thứ tự
             group_sorted = group.sort_values("index_in_paragraph")
-            text = " ".join(group_sorted["text"].astype(str).tolist()).strip()
+            text = " ".join(group_sorted["text"].astype(str).tolist())
+            # Strip dấu câu thừa ở đầu đoạn (mỗi đoạn sẽ thành 1 dòng trong chunk
+            # nên xử lý ở đây giúp sạch cả đầu chunk lẫn đầu các dòng nội bộ).
+            text = _clean_lead(text)
 
             if text:
                 paragraphs.append(
@@ -312,7 +327,8 @@ class AnleChunker:
             if len(chunk["text"]) > self.max_chunk_size:
                 sub_texts = self.text_splitter.split_text(chunk["text"])
                 for sc in sub_texts:
-                    if len(sc.strip()) >= 10:
+                    sc = _clean_lead(sc)
+                    if len(sc) >= 10:
                         split_chunks.append({
                             "text": sc,
                             "section_kind": chunk["section_kind"]

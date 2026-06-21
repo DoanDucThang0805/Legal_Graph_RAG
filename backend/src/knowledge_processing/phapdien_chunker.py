@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 KHOAN_PATTERN = re.compile(r"^([1-9]\d?)\.\s+(?=.{15,})", re.MULTILINE)
 
+# Dấu câu/khoảng trắng thừa ở đầu chunk (thường do RecursiveCharacterTextSplitter
+# cắt ngay sau separator ". " / "; " khiến sub-chunk bắt đầu bằng dấu câu mồ côi).
+_LEADING_NOISE = re.compile(r"^[\s.;,:]+")
+
+
+def _clean_lead(text: str) -> str:
+    """Loại bỏ dấu câu/khoảng trắng thừa ở đầu chuỗi."""
+    return _LEADING_NOISE.sub("", text).strip()
+
 
 class PhapdienChunker:
     """Structural-aware chunker cho bộ Pháp Điển Việt Nam.
@@ -163,8 +172,9 @@ class PhapdienChunker:
         """
         sub_chunks = self.text_splitter.split_text(chunk_text)
 
-        # Lọc bỏ mảnh vụn cực nhỏ (edge case từ LangChain splitter)
-        sub_chunks = [sc for sc in sub_chunks if len(sc.strip()) >= 10]
+        # Làm sạch dấu câu mồ côi ở đầu + lọc bỏ mảnh vụn cực nhỏ (edge case
+        # từ LangChain splitter)
+        sub_chunks = [c for c in (_clean_lead(sc) for sc in sub_chunks) if len(c) >= 10]
         if not sub_chunks:
             return [chunk_text]  # fallback: giữ nguyên nếu lọc hết
 
@@ -216,17 +226,19 @@ class PhapdienChunker:
         """Tạo context prefix cho embed_text theo đúng thứ tự phân cấp.
 
         Thứ tự: Chủ đề (topic) > Đề mục (subject) > Chương > Điều
+
+        Dedup các cấp trùng liên tiếp (VD: topic == subject == "An ninh quốc gia")
+        để tránh lặp "An ninh quốc gia > An ninh quốc gia > ..." gây phí token.
         """
-        parts = [
-            p
-            for p in [
-                metadata.get("topic_title_vi", ""),
-                metadata.get("subject_title_vi", ""),
-                metadata.get("chapter_title", ""),
-                metadata.get("article_title", ""),
-            ]
-            if p
-        ]
+        parts: list[str] = []
+        for p in [
+            metadata.get("topic_title_vi", ""),
+            metadata.get("subject_title_vi", ""),
+            metadata.get("chapter_title", ""),
+            metadata.get("article_title", ""),
+        ]:
+            if p and (not parts or parts[-1] != p):
+                parts.append(p)
         return " > ".join(parts) + "\n" if parts else ""
 
     # ------------------------------------------------------------------
