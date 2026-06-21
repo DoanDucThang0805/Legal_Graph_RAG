@@ -338,7 +338,7 @@ knowlegde_data/anle/
 
 > **Status**: ✅ Đã triển khai — `entity_extractor.py` (orchestrator 3 lớp) + `llm_extractor.py` (Lớp 2) + `schema/extraction_schema.py` (Pydantic schema)
 > - **Lớp 1 (regex):** VBPL có số hiệu, Điều, Khung hình phạt.
-> - **Lớp 2 (LLM — Qwen3-14B self-host qua vLLM):** entity + quan hệ phức tạp bằng **guided JSON decoding** (async, pre-filter dấu hiệu quan hệ, checkpoint/resume). Bật bằng `use_llm=True`, **cần vLLM đang chạy** (`make vllm-up`).
+> - **Lớp 2 (LLM — Qwen3-14B self-host qua vLLM):** entity + quan hệ phức tạp bằng **guided JSON decoding** (async, pre-filter dấu hiệu quan hệ, checkpoint/resume). LLM đọc `embed_text` **tách 2 mục NGỮ CẢNH/NỘI DUNG** + **retry chống cắt cụt JSON**. Bật bằng `use_llm=True`, **cần vLLM đang chạy** (`make vllm-up`).
 > - **Lớp 3 (source_links):** `Article -THUOC-> VBPL` từ `source_links_json` (phủ ~100%, chính xác cao, miễn phí).
 > - Output: `knowlegde_data/graph/nodes.parquet` & `edges.parquet`.
 
@@ -397,7 +397,15 @@ Self-host **Qwen3-14B** bằng vLLM (OpenAI-compatible), gọi qua `openai` SDK 
 Tối ưu cho ~270k chunk:
 - **Pre-filter**: chỉ gọi LLM cho chunk có "dấu hiệu quan hệ" (sửa đổi / thay thế /
   hướng dẫn / dẫn chiếu...) → ~22% (≈ **60.249 lần gọi**). Chunk còn lại đã được Lớp 1
-  phủ entity.
+  phủ entity. Lọc tín hiệu dựa trên `chunk_text` (nội dung thật).
+- **Ngữ cảnh tách biệt**: LLM nhận `embed_text` (qua `embed_col="embed_text"`) nhưng prompt
+  CHIA 2 mục — `## NGỮ CẢNH` (tiền tố phân cấp/bản án: chỉ để HIỂU, KHÔNG trích) và
+  `## NỘI DUNG` (CHỈ trích entity/quan hệ từ đây). Nhờ vậy LLM biết chunk thuộc luật/điều/vụ
+  án nào để qualify đúng tham chiếu (vd "khoản 2" thuộc Điều nào) mà **không trích tiêu đề
+  chủ đề/chương/mục thành entity rác**.
+- **Độ bền (chống cắt cụt JSON)**: `max_tokens=3072`; nếu output bị cắt cụt
+  (`finish_reason == "length"`) hoặc parse JSON fail → **retry 1 lần với budget gấp đôi
+  (~6144)**. Tránh mất các chunk dày đặc entity (vốn là điều luật quan trọng).
 - **Async + concurrency** (vLLM continuous batching) + **checkpoint/resume**
   (`llm_extract_checkpoint.jsonl`): dừng/chạy lại an toàn, không gọi lại chunk đã xong.
 
@@ -431,6 +439,9 @@ PYTHONPATH=src nohup venv/bin/python -m knowledge_processing.entity_extractor \
 - **Staged**: graph từ Lớp 1+3 đã đủ để dựng Phase 4 ngay; Lớp 2 chạy nền, gộp quan hệ
   vào graph sau (nạp Neo4j bằng MERGE nên idempotent).
 - Dừng giữa chừng → chạy lại đúng lệnh trên là làm tiếp từ checkpoint.
+- ⚠️ Khi **đổi prompt/logic Lớp 2** (vd tách NGỮ CẢNH/NỘI DUNG), nên
+  `rm knowlegde_data/graph/llm_extract_checkpoint.jsonl` rồi chạy lại để toàn bộ chunk được
+  trích đồng nhất theo phiên bản mới (checkpoint cũ vẫn được giữ nguyên nếu không xoá).
 
 ---
 

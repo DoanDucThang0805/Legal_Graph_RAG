@@ -301,6 +301,7 @@ class EntityExtractor:
                 df = df.head(self.sample_size)
             results = extractor.run(
                 df,
+                embed_col="embed_text",  # gửi LLM bản có ngữ cảnh phân cấp
                 sample_size=self.llm_sample_size,
                 only_with_signal=self.llm_only_with_signal,
             )

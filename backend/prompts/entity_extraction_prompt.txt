@@ -23,6 +23,12 @@ Bạn là chuyên gia trích xuất thông tin pháp lý Việt Nam. Nhiệm v�
 3. `source` và `target` của relation PHẢI trùng khớp `name` của một entity đã liệt kê.
 4. Nếu không có thực thể/quan hệ nào → trả về danh sách rỗng.
 5. Bỏ qua thực thể quá chung chung, vô nghĩa cho tra cứu.
+6. CHỈ trích entity & quan hệ từ phần "## NỘI DUNG". Phần "## NGỮ CẢNH" chỉ để HIỂU chunk
+   thuộc luật/điều/vụ án nào (qualify đúng tham chiếu, vd "khoản 2" thuộc Điều nào) —
+   TUYỆT ĐỐI KHÔNG trích các tiêu đề chủ đề/đề mục/chương/mục trong phần ngữ cảnh thành entity.
 
-## ĐOẠN VĂN BẢN
-{chunk_text}
+## NGỮ CẢNH (chỉ tham khảo để hiểu — KHÔNG trích làm entity)
+{context}
+
+## NỘI DUNG (TRÍCH entity & quan hệ TỪ ĐÂY)
+{content}
