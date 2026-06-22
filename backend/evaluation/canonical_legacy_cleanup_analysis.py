@@ -19,6 +19,17 @@ TRIGGER_COLUMNS = (
     "needs_retrieval_filtering",
 )
 
+TARGET_FILTER_CATEGORIES = set(TRIGGER_COLUMNS) | {
+    "canonical_metadata_cleanup_needed",
+    "answer_patch_possible",
+}
+
+CATEGORY_FALLBACK_COLUMNS = (
+    "trigger_categories",
+    "issue_categories",
+    "recommended_action",
+)
+
 REPORT_FILES = {
     "report": "canonical_legacy_metadata_report.csv",
     "by_article": "canonical_legacy_grouped_by_article.csv",
@@ -354,8 +365,48 @@ def build_candidate_metadata_cleanup_rules() -> dict[str, Any]:
     }
 
 
-def _filter_residual_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [row for row in rows if any(_truthy(row.get(col)) for col in TRIGGER_COLUMNS)]
+def _split_categories(value: Any) -> list[str]:
+    raw = _text(value)
+    if not raw:
+        return []
+    return [part.strip() for part in re.split(r"[;,|]", raw) if part.strip()]
+
+
+def _row_filter_categories(row: dict[str, Any]) -> set[str]:
+    categories: set[str] = set()
+    for col in TRIGGER_COLUMNS:
+        if _truthy(row.get(col)):
+            categories.add(col)
+    for col in CATEGORY_FALLBACK_COLUMNS:
+        categories.update(_split_categories(row.get(col)))
+    return categories
+
+
+def _filter_residual_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    columns_used = [col for col in TRIGGER_COLUMNS if any(_text(row.get(col)) for row in rows)]
+    fallback_columns_used = [col for col in CATEGORY_FALLBACK_COLUMNS if any(_text(row.get(col)) for row in rows)]
+    filtered: list[dict[str, Any]] = []
+    categories_seen: set[str] = set()
+
+    for row in rows:
+        row_categories = _row_filter_categories(row)
+        categories_seen.update(row_categories)
+        if row_categories & TARGET_FILTER_CATEGORIES:
+            filtered.append(row)
+
+    warnings: list[str] = []
+    if rows and not columns_used and fallback_columns_used:
+        warnings.append(f"boolean trigger columns missing/empty; used fallback columns: {', '.join(fallback_columns_used)}")
+    if rows and not filtered:
+        warnings.append("input residual report has rows but filter matched 0 rows; inspect trigger_categories/issue_categories/recommended_action values")
+
+    return filtered, {
+        "input_residual_report_rows": len(rows),
+        "filtered_residual_rows": len(filtered),
+        "residual_filter_columns_used": columns_used + fallback_columns_used,
+        "residual_filter_categories_seen": sorted(categories_seen),
+        "residual_filter_warning": "; ".join(warnings),
+    }
 
 
 def _row_id(row: dict[str, Any]) -> str:
@@ -388,6 +439,9 @@ def _evidence_for_row(anomalies: list[str], residual: dict[str, Any]) -> str:
     for col in TRIGGER_COLUMNS:
         if _truthy(residual.get(col)):
             bits.append(f"residual:{col}")
+    for col in CATEGORY_FALLBACK_COLUMNS:
+        for category in _split_categories(residual.get(col)):
+            bits.append(f"residual:{col}:{category}")
     return _joined(bits)
 
 
@@ -405,7 +459,8 @@ def build_canonical_legacy_cleanup_plan(
         shutil.rmtree(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    residual_rows = _filter_residual_rows(_load_csv_rows(residual_report_path))
+    residual_rows_all = _load_csv_rows(residual_report_path)
+    residual_rows, residual_filter_debug = _filter_residual_rows(residual_rows_all)
     low_by_id = _load_csv_by_id(low_confidence_path)
     retrieval_by_id = _load_jsonl_by_id(retrieval_results_path)
     answers_by_id = _load_jsonl_by_id(answers_path)
@@ -491,6 +546,7 @@ def build_canonical_legacy_cleanup_plan(
         grouped_article_rows=grouped_article_rows,
         grouped_law_rows=grouped_law_rows,
         canonical_documents_path=canonical_documents_path,
+        residual_filter_debug=residual_filter_debug,
     )
     _write_csv(output_path / REPORT_FILES["report"], report_rows, REPORT_COLUMNS)
     _write_csv(output_path / REPORT_FILES["by_article"], grouped_article_rows, GROUPED_ARTICLE_COLUMNS)
@@ -547,6 +603,7 @@ def _build_summary(
     grouped_article_rows: list[dict[str, Any]],
     grouped_law_rows: list[dict[str, Any]],
     canonical_documents_path: str | Path | None,
+    residual_filter_debug: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     anomaly_counter: Counter[str] = Counter()
     samples: dict[str, list[str]] = defaultdict(list)
@@ -563,7 +620,7 @@ def _build_summary(
     article_counter = Counter(row["article_id"] for row in report_rows)
     khong_so_rows = [row for row in report_rows if contains_khong_so(row["law_id"], row["law_title"])]
     legacy_overlap_question_ids = {row["question_id"] for row in report_rows if "modern_and_legacy_overlap_same_question" in _split_list_field(row.get("anomaly_categories"))}
-    return {
+    summary = {
         "total_residual_rows": len(residual_rows),
         "total_selected_article_refs_scanned": len(report_rows),
         "unique_selected_article_ids": len({row["article_id"] for row in report_rows}),
@@ -586,6 +643,17 @@ def _build_summary(
         "grouped_law_rows": len(grouped_law_rows),
         "final_recommendation": _final_recommendation(action_counter, anomaly_counter),
     }
+    if residual_filter_debug:
+        summary.update(residual_filter_debug)
+    else:
+        summary.update({
+            "input_residual_report_rows": len(residual_rows),
+            "filtered_residual_rows": len(residual_rows),
+            "residual_filter_columns_used": [],
+            "residual_filter_categories_seen": [],
+            "residual_filter_warning": "",
+        })
+    return summary
 
 
 def _top_counter(counter: Counter[str], limit: int = 20) -> list[dict[str, Any]]:
@@ -646,6 +714,9 @@ More answer patching would hide symptoms after retrieval and generation. The saf
 
 All candidate rules emitted by P6.R9 are disabled by default. Rollback is simply deleting the generated P6.R9 output directory or ignoring its candidate rule files. No retrieval results, answers, or canonical parquet files are modified by this task.
 """
+
+
+
 
 
 

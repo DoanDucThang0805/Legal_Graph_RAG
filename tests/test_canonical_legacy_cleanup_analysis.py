@@ -7,6 +7,7 @@ from pathlib import Path
 import polars as pl
 
 from backend.evaluation.canonical_legacy_cleanup_analysis import (
+    _filter_residual_rows,
     build_candidate_metadata_cleanup_rules,
     build_canonical_legacy_cleanup_plan,
     detect_family,
@@ -44,6 +45,50 @@ def test_parse_selected_articles_dict_list() -> None:
     assert rows[1]["article_id"] == "33/2005/QH11|Bộ luật Dân sự 2005|Điều 1"
 
 
+
+def test_filter_residual_rows_trigger_categories_semicolon() -> None:
+    rows, debug = _filter_residual_rows([
+        {"question_id": "1", "trigger_categories": "selected_contains_khong_so;needs_canonical_metadata_cleanup"},
+        {"question_id": "2", "trigger_categories": "unrelated"},
+    ])
+    assert [row["question_id"] for row in rows] == ["1"]
+    assert debug["input_residual_report_rows"] == 2
+    assert debug["filtered_residual_rows"] == 1
+    assert "trigger_categories" in debug["residual_filter_columns_used"]
+
+
+def test_filter_residual_rows_trigger_categories_comma() -> None:
+    rows, debug = _filter_residual_rows([
+        {"question_id": "1", "trigger_categories": "foo, selected_contains_old_code_or_legacy_doc, bar"},
+    ])
+    assert len(rows) == 1
+    assert "selected_contains_old_code_or_legacy_doc" in debug["residual_filter_categories_seen"]
+
+
+def test_filter_residual_rows_issue_categories_fallback() -> None:
+    rows, debug = _filter_residual_rows([
+        {"question_id": "1", "issue_categories": "foo|needs_retrieval_filtering|bar"},
+    ])
+    assert len(rows) == 1
+    assert "issue_categories" in debug["residual_filter_columns_used"]
+
+
+def test_filter_residual_rows_recommended_action_fallback() -> None:
+    rows, debug = _filter_residual_rows([
+        {"question_id": "1", "recommended_action": "canonical_metadata_cleanup_needed"},
+    ])
+    assert len(rows) == 1
+    assert "recommended_action" in debug["residual_filter_columns_used"]
+
+
+def test_filter_residual_rows_warns_when_input_rows_filter_to_zero() -> None:
+    rows, debug = _filter_residual_rows([
+        {"question_id": "1", "trigger_categories": "unrelated_category"},
+    ])
+    assert rows == []
+    assert debug["input_residual_report_rows"] == 1
+    assert debug["filtered_residual_rows"] == 0
+    assert "filter matched 0 rows" in debug["residual_filter_warning"]
 def test_detect_family_labor_code() -> None:
     assert detect_family("45/2019/QH14", "Bộ luật Lao động 2019") == "Bộ luật Lao động"
 
@@ -143,6 +188,10 @@ def test_build_canonical_legacy_cleanup_plan_outputs_reports(tmp_path: Path) -> 
     )
 
     assert summary["total_residual_rows"] == 2
+    assert summary["input_residual_report_rows"] == 2
+    assert summary["filtered_residual_rows"] == 2
+    assert "selected_contains_khong_so" in summary["residual_filter_columns_used"]
+    assert summary["residual_filter_categories_seen"]
     assert summary["total_selected_article_refs_scanned"] == 4
     assert summary["khong_so_article_count"] == 1
     assert summary["canonical_join_missing_count"] == 1
@@ -164,3 +213,5 @@ def test_build_canonical_legacy_cleanup_plan_outputs_reports(tmp_path: Path) -> 
     assert old_row["recommended_action"] == "exact_alias_mapping_candidate"
     assert civil_row["recommended_action"] == "keep_no_action"
     assert missing_row["recommended_action"] == "manual_review_required"
+
+
