@@ -1,4 +1,4 @@
-"""Run P6.R8 targeted legacy answer display patch."""
+﻿"""Run P6.R8/P6.R8a targeted legacy answer display patch."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         p6r7_report_path=args.p6r7_report,
         answers_path=args.answers,
         output_dir=args.output_dir,
+        only_after_contains_khong_so=args.only_after_contains_khong_so,
+        stronger_cleanup=args.stronger_cleanup,
     )
     logger.info("Summary: %s", summary)
     print(summary)
@@ -37,6 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p6r7-report", required=True)
     parser.add_argument("--answers", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--only-after-contains-khong-so",
+        action="store_true",
+        help="Patch only rows whose input patch report still has after_contains_khong_so=True.",
+    )
+    parser.add_argument(
+        "--stronger-cleanup",
+        action="store_true",
+        help="Enable P6.R8a stronger target-only cleanup rules and output filenames.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 

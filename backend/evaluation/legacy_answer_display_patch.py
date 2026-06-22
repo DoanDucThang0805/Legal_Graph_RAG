@@ -1,8 +1,8 @@
-"""Patch conservative legacy metadata display text in generated answers.
+﻿"""Patch conservative legacy metadata display text in generated answers.
 
-This module only edits the answer string for target IDs identified by P6.R7.
-It does not change retrieval rows, selected articles, canonical metadata, or
-submission fields.
+This module only edits the answer string for target IDs identified by P6.R7/P6.R8
+reports. It does not change retrieval rows, selected articles, canonical metadata,
+or submission fields.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from typing import Any
 OUTPUT_ANSWERS_FILENAME = "generated_answers_p6r8_legacy_display_patch.jsonl"
 PATCH_REPORT_FILENAME = "legacy_answer_patch_report.csv"
 PATCH_SUMMARY_FILENAME = "legacy_answer_patch_summary.json"
+OUTPUT_ANSWERS_R8A_FILENAME = "generated_answers_p6r8a_legacy_display_patch.jsonl"
+PATCH_REPORT_R8A_FILENAME = "legacy_answer_patch_r8a_report.csv"
+PATCH_SUMMARY_R8A_FILENAME = "legacy_answer_patch_r8a_summary.json"
 
 TARGET_ACTION = "answer_patch_possible"
 THINK_MARKERS = ("<think>", "</think>")
@@ -33,13 +36,34 @@ REPORT_COLUMNS = [
     "after_answer_preview",
     "patch_notes",
 ]
+R8A_REPORT_COLUMNS = [
+    "id",
+    "target",
+    "patched",
+    "before_contains_khong_so",
+    "after_contains_khong_so",
+    "before_answer_preview",
+    "after_answer_preview",
+    "patch_notes",
+]
 
 PREFIX_KHONG_SO_PATTERN = re.compile(
-    r"\b(?P<prefix>Ph\u00e1p\s+l\u1ec7nh|Lu\u1eadt|B\u1ed9\s+lu\u1eadt)\s+(?:Kh\u00f4ng|Khong)\s+(?:s\u1ed1|so)\s+",
+    r"\b(?P<prefix>Ph\u00e1p\s+l\u1ec7nh|Lu\u1eadt|B\u1ed9\s+lu\u1eadt)\s+(?:Kh\u00f4ng|Khong)\s+(?:s\u1ed1|so)\b\s*",
     flags=re.IGNORECASE,
 )
 SO_KHONG_SO_PATTERN = re.compile(
     r"\b(?:s\u1ed1|S\u1ed1|so|So)\s+(?:Kh\u00f4ng|kh\u00f4ng|Khong|khong)\s+(?:s\u1ed1|so)\b",
+)
+LEGAL_BASIS_KHONG_SO_PATTERN = re.compile(
+    r"\s+-\s+(?:Kh\u00f4ng|kh\u00f4ng|Khong|khong)\s+(?:s\u1ed1|so)\s+-\s+",
+)
+MIXED_VERSION_KHONG_SO_PATTERN = re.compile(
+    r"\s+(?:v\u00e0|ho\u1eb7c)\s+(?:Kh\u00f4ng|kh\u00f4ng|Khong|khong)\s+(?:s\u1ed1|so)\b",
+    flags=re.IGNORECASE,
+)
+DOC_NOUN_KHONG_SO_PATTERN = re.compile(
+    r"\b(?P<prefix>Lu\u1eadt|B\u1ed9\s+lu\u1eadt|Ph\u00e1p\s+l\u1ec7nh|Ban\s+Ghi\s+Nho|Ngh\u1ecb\s+quy\u1ebft|Quy\u1ebft\s+\u0111\u1ecbnh|Th\u00f4ng\s+t\u01b0|Ngh\u1ecb\s+\u0111\u1ecbnh)\s+(?:Kh\u00f4ng|kh\u00f4ng|Khong|khong)\s+(?:s\u1ed1|so)\b\s*",
+    flags=re.IGNORECASE,
 )
 
 
@@ -47,14 +71,22 @@ def run_legacy_answer_display_patch(
     p6r7_report_path: str | Path,
     answers_path: str | Path,
     output_dir: str | Path,
+    *,
+    only_after_contains_khong_so: bool = False,
+    stronger_cleanup: bool = False,
 ) -> dict[str, Any]:
     """Patch target answer display text and write JSONL, report CSV, and summary."""
-    target_actions = read_target_actions(p6r7_report_path)
+    report_entries = read_patch_report(p6r7_report_path)
     answer_rows = read_jsonl_records(answers_path)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    target_ids = {row_id for row_id, action in target_actions.items() if action == TARGET_ACTION}
+    target_ids = select_target_ids(report_entries, only_after_contains_khong_so=only_after_contains_khong_so)
+    target_actions = {
+        row_id: _safe_text(row.get("recommended_action"))
+        for row_id, row in report_entries.items()
+        if _safe_text(row.get("recommended_action"))
+    }
     patched_rows: list[dict[str, Any]] = []
     report_rows: list[dict[str, Any]] = []
     changed_non_target_ids: list[str] = []
@@ -72,11 +104,11 @@ def run_legacy_answer_display_patch(
         ids_seen.add(row_id)
 
         before_answer = _safe_text(row.get("answer"))
-        before_has_legal_basis = LEGAL_BASIS_MARKER in before_answer
+        before_has_legal_basis = has_legal_basis_marker(before_answer)
         patched_answer = before_answer
         notes: list[str] = []
         if row_id in target_ids:
-            patched_answer, notes = patch_legacy_answer_display(before_answer)
+            patched_answer, notes = patch_legacy_answer_display(before_answer, stronger_cleanup=stronger_cleanup)
             output_row["answer"] = patched_answer
 
         if row_id not in target_ids and patched_answer != before_answer:
@@ -85,36 +117,42 @@ def run_legacy_answer_display_patch(
             empty_answer_ids.append(row_id)
         if any(marker in _safe_text(output_row.get("answer")) for marker in THINK_MARKERS):
             think_marker_ids.append(row_id)
-        if before_has_legal_basis and LEGAL_BASIS_MARKER not in _safe_text(output_row.get("answer")):
+        if before_has_legal_basis and not has_legal_basis_marker(output_row.get("answer")):
             legal_basis_lost_ids.append(row_id)
 
         if row_id in target_ids:
-            report_rows.append(
-                {
-                    "id": row_id,
-                    "recommended_action": target_actions.get(row_id, ""),
-                    "patched": patched_answer != before_answer,
-                    "before_contains_khong_so": contains_khong_so(before_answer),
-                    "after_contains_khong_so": contains_khong_so(patched_answer),
-                    "before_answer_preview": preview(before_answer),
-                    "after_answer_preview": preview(patched_answer),
-                    "patch_notes": ";".join(notes) if notes else "unchanged_no_khong_so_pattern",
-                }
-            )
+            report_row = {
+                "id": row_id,
+                "target": True,
+                "recommended_action": target_actions.get(row_id, ""),
+                "patched": patched_answer != before_answer,
+                "before_contains_khong_so": contains_khong_so(before_answer),
+                "after_contains_khong_so": contains_khong_so(patched_answer),
+                "before_answer_preview": preview(before_answer),
+                "after_answer_preview": preview(patched_answer),
+                "patch_notes": ";".join(notes) if notes else "unchanged_no_khong_so_pattern",
+            }
+            report_rows.append(report_row)
         patched_rows.append(output_row)
 
-    output_answers_path = output_path / OUTPUT_ANSWERS_FILENAME
-    report_path = output_path / PATCH_REPORT_FILENAME
-    summary_path = output_path / PATCH_SUMMARY_FILENAME
+    output_answers_path = output_path / (
+        OUTPUT_ANSWERS_R8A_FILENAME if stronger_cleanup else OUTPUT_ANSWERS_FILENAME
+    )
+    report_path = output_path / (PATCH_REPORT_R8A_FILENAME if stronger_cleanup else PATCH_REPORT_FILENAME)
+    summary_path = output_path / (PATCH_SUMMARY_R8A_FILENAME if stronger_cleanup else PATCH_SUMMARY_FILENAME)
     write_jsonl(output_answers_path, patched_rows)
-    write_csv(report_path, REPORT_COLUMNS, report_rows)
+    write_csv(report_path, R8A_REPORT_COLUMNS if stronger_cleanup else REPORT_COLUMNS, report_rows)
 
     patched_count = sum(_as_bool(row.get("patched")) for row in report_rows)
     before_contains_count = sum(_as_bool(row.get("before_contains_khong_so")) for row in report_rows)
     after_contains_count = sum(_as_bool(row.get("after_contains_khong_so")) for row in report_rows)
+    hyphen_double_separator_ids = [
+        _safe_text(row.get("id")) for row in patched_rows if " -  - " in _safe_text(row.get("answer"))
+    ]
     summary = {
         "input_answer_path": str(answers_path),
         "p6r7_report_path": str(p6r7_report_path),
+        "input_patch_report_path": str(p6r7_report_path),
         "output_answer_path": str(output_answers_path),
         "total_answers": len(answer_rows),
         "target_patch_ids": len(target_ids),
@@ -132,17 +170,19 @@ def run_legacy_answer_display_patch(
             "non_target_changed_ids": changed_non_target_ids,
             "think_marker_ids": think_marker_ids,
             "legal_basis_lost_ids": legal_basis_lost_ids,
+            "hyphen_double_separator_ids": hyphen_double_separator_ids,
             "only_target_ids_changed": not changed_non_target_ids,
             "no_empty_answers": not empty_answer_ids,
             "no_think_markers": not think_marker_ids,
             "legal_basis_preserved": not legal_basis_lost_ids,
+            "no_hyphen_double_separator": not hyphen_double_separator_ids,
         },
     }
     write_json(summary_path, summary)
     return {**summary, "report_path": str(report_path), "summary_path": str(summary_path)}
 
 
-def patch_legacy_answer_display(answer: str) -> tuple[str, list[str]]:
+def patch_legacy_answer_display(answer: str, *, stronger_cleanup: bool = False) -> tuple[str, list[str]]:
     """Remove only display-level 'Khong so' fragments, never infer law IDs."""
     text = str(answer or "")
     notes: list[str] = []
@@ -152,6 +192,18 @@ def patch_legacy_answer_display(answer: str) -> tuple[str, list[str]]:
     patched, count_so = SO_KHONG_SO_PATTERN.subn("", patched)
     if count_so:
         notes.append("removed_so_khong_so")
+    if stronger_cleanup:
+        patched, count_basis = LEGAL_BASIS_KHONG_SO_PATTERN.subn(" - ", patched)
+        if count_basis:
+            notes.append("removed_legal_basis_khong_so")
+        patched, count_mixed = MIXED_VERSION_KHONG_SO_PATTERN.subn("", patched)
+        if count_mixed:
+            notes.append("removed_mixed_version_khong_so")
+        patched, count_doc_noun = DOC_NOUN_KHONG_SO_PATTERN.subn(
+            lambda match: f"{match.group('prefix')} ", patched
+        )
+        if count_doc_noun:
+            notes.append("removed_doc_noun_khong_so")
     if notes:
         patched = cleanup_spacing_preserve_lines(patched)
     return patched, notes
@@ -165,6 +217,8 @@ def cleanup_spacing_preserve_lines(text: str) -> str:
         compact = re.sub(r"[ \t]{2,}", " ", line)
         compact = re.sub(r"\s+([,.;:!?])", r"\1", compact)
         compact = re.sub(r"([(\[])\s+", r"\1", compact)
+        compact = re.sub(r"\s+-\s+-\s+", " - ", compact)
+        compact = re.sub(r"\s+-\s+", " - ", compact)
         cleaned.append(compact.strip())
     result = "\n".join(cleaned)
     return re.sub(r"\n{3,}", "\n\n", result).strip()
@@ -174,22 +228,53 @@ def contains_khong_so(value: Any) -> bool:
     return "khong so" in ascii_fold(value)
 
 
-def read_target_actions(path: str | Path) -> dict[str, str]:
+def has_legal_basis_marker(value: Any) -> bool:
+    text = _safe_text(value)
+    return LEGAL_BASIS_MARKER in text or "can cu phap ly" in ascii_fold(text)
+
+
+def select_target_ids(
+    report_entries: Mapping[str, Mapping[str, Any]],
+    *,
+    only_after_contains_khong_so: bool,
+) -> set[str]:
+    if only_after_contains_khong_so:
+        return {
+            row_id
+            for row_id, row in report_entries.items()
+            if _as_bool(row.get("after_contains_khong_so"))
+        }
+    return {
+        row_id
+        for row_id, row in report_entries.items()
+        if _safe_text(row.get("recommended_action")) == TARGET_ACTION
+    }
+
+
+def read_patch_report(path: str | Path) -> dict[str, dict[str, str]]:
     source = Path(path)
     if not source.is_file():
-        raise FileNotFoundError(f"P6.R7 report does not exist: {source}")
-    actions: dict[str, str] = {}
+        raise FileNotFoundError(f"patch report does not exist: {source}")
+    rows: dict[str, dict[str, str]] = {}
     with source.open("r", encoding="utf-8", newline="") as file:
         reader = csv.DictReader(file)
-        required = {"id", "recommended_action"}
+        required = {"id"}
         missing = required - set(reader.fieldnames or [])
         if missing:
-            raise ValueError(f"P6.R7 report missing required columns: {sorted(missing)}")
+            raise ValueError(f"patch report missing required columns: {sorted(missing)}")
         for row in reader:
             row_id = _safe_text(row.get("id"))
             if row_id:
-                actions[row_id] = _safe_text(row.get("recommended_action"))
-    return actions
+                rows[row_id] = {key: _safe_text(value) for key, value in row.items()}
+    return rows
+
+
+def read_target_actions(path: str | Path) -> dict[str, str]:
+    return {
+        row_id: _safe_text(row.get("recommended_action"))
+        for row_id, row in read_patch_report(path).items()
+        if _safe_text(row.get("recommended_action"))
+    }
 
 
 def read_jsonl_records(path: str | Path) -> list[dict[str, Any]]:
