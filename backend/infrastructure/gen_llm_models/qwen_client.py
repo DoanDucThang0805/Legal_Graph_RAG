@@ -11,7 +11,11 @@ import os
 from dataclasses import dataclass
 
 from backend.config.settings import get_settings
-from backend.infrastructure.gen_llm_models.vllm_client import VLLMClient, VLLMClientConfig
+from backend.infrastructure.gen_llm_models.vllm_client import (
+    VLLMClient,
+    VLLMClientConfig,
+    disable_thinking_from_env,
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,7 @@ class QwenClientConfig(VLLMClientConfig):
                 os.getenv("QWEN_RETRY_BACKOFF_SECONDS", os.getenv("VLLM_RETRY_BACKOFF_SECONDS", "1.0"))
             ),
             api_key=os.getenv("QWEN_API_KEY") or os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
+            disable_thinking=disable_thinking_from_env(prefix="QWEN") or disable_thinking_from_env(prefix="VLLM"),
         )
 
 

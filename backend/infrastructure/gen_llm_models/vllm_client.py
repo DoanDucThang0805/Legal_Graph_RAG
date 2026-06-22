@@ -35,6 +35,7 @@ class VLLMClientConfig:
     max_retries: int = 2
     retry_backoff_seconds: float = 1.0
     api_key: str | None = None
+    disable_thinking: bool = False
 
     @classmethod
     def from_env(cls) -> "VLLMClientConfig":
@@ -51,7 +52,37 @@ class VLLMClientConfig:
             max_retries=int(os.getenv("VLLM_MAX_RETRIES", "2")),
             retry_backoff_seconds=float(os.getenv("VLLM_RETRY_BACKOFF_SECONDS", "1.0")),
             api_key=os.getenv("VLLM_API_KEY") or os.getenv("OPENAI_API_KEY") or None,
+            disable_thinking=disable_thinking_from_env(prefix="VLLM"),
         )
+
+
+def _with_disabled_thinking(payload: dict[str, Any]) -> dict[str, Any]:
+    chat_template_kwargs = payload.get("chat_template_kwargs")
+    if chat_template_kwargs is None:
+        merged_kwargs: dict[str, Any] = {}
+    elif isinstance(chat_template_kwargs, dict):
+        merged_kwargs = dict(chat_template_kwargs)
+    else:
+        raise ValueError("chat_template_kwargs must be a mapping when provided")
+
+    merged_kwargs["enable_thinking"] = False
+    return {**payload, "chat_template_kwargs": merged_kwargs}
+
+
+def disable_thinking_from_env(prefix: str) -> bool:
+    disable_value = os.getenv(f"{prefix}_DISABLE_THINKING")
+    if disable_value is not None:
+        return _env_flag_enabled(disable_value)
+
+    enable_value = os.getenv(f"{prefix}_ENABLE_THINKING")
+    if enable_value is not None:
+        return not _env_flag_enabled(enable_value)
+
+    return False
+
+
+def _env_flag_enabled(value: str) -> bool:
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "on"}
 
 
 class VLLMClient:
@@ -88,6 +119,8 @@ class VLLMClient:
             "max_tokens": kwargs.pop("max_tokens", self.config.max_tokens),
         }
         payload.update(kwargs)
+        if self.config.disable_thinking:
+            payload = _with_disabled_thinking(payload)
         return payload
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
