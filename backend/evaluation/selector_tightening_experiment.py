@@ -69,16 +69,53 @@ class SelectorTighteningConfig:
     include_debug_field: bool = True
 
 
+@dataclass(frozen=True)
+class ArticleRef:
+    article_id: str
+    law_id: str
+    law_title: str
+    article_no: str
+
+
+def parse_article_id(article_id: str) -> ArticleRef:
+    text = _safe_text(article_id)
+    parts = [part.strip() for part in text.split("|")]
+    if len(parts) >= 3:
+        return ArticleRef(article_id=text, law_id=parts[0], law_title=parts[1], article_no=parts[2])
+    return ArticleRef(article_id=text, law_id="", law_title="", article_no="")
+
+
+def extract_selected_articles(row: Mapping[str, Any]) -> list[str]:
+    selected = _safe_list(row.get("selected_articles"))
+    result: list[str] = []
+    for item in selected:
+        if isinstance(item, str):
+            article_id = item.strip()
+        elif isinstance(item, Mapping):
+            article_id = _safe_text(item.get("article_id"))
+        else:
+            article_id = ""
+        if article_id:
+            result.append(article_id)
+    return result
+
+
+def set_selected_articles(row: Mapping[str, Any], tightened_article_ids: list[str]) -> dict[str, Any]:
+    output = dict(row)
+    output["selected_articles"] = list(tightened_article_ids)
+    return output
+
+
 def is_explicit_multilaw_question(question: str) -> bool:
     lowered = _safe_text(question).casefold()
     return any(signal in lowered for signal in EXPLICIT_MULTILAW_SIGNALS)
 
 
-def metadata_quality_penalty(article: Mapping[str, Any]) -> float:
+def metadata_quality_penalty(ref: ArticleRef) -> float:
     penalty = 0.0
-    law_id = _safe_text(article.get("law_id"))
-    law_title = _safe_text(article.get("law_title"))
-    article_id = _safe_text(article.get("article_id"))
+    law_id = ref.law_id
+    law_title = ref.law_title
+    article_id = ref.article_id
     if law_id.casefold() in UNKNOWN_LAW_IDS:
         penalty += 2.0
     if not law_title:
@@ -92,8 +129,8 @@ def metadata_quality_penalty(article: Mapping[str, Any]) -> float:
     return penalty
 
 
-def compute_law_cluster_strength(selected_articles: list[Mapping[str, Any]]) -> dict[str, Any]:
-    law_counts = Counter(_law_id(article) for article in selected_articles if _law_id(article))
+def compute_law_cluster_strength(selected_articles: list[ArticleRef]) -> dict[str, Any]:
+    law_counts = Counter(_law_id(ref) for ref in selected_articles if _law_id(ref))
     primary_law_id = ""
     if law_counts:
         primary_law_id = law_counts.most_common(1)[0][0]
@@ -102,28 +139,29 @@ def compute_law_cluster_strength(selected_articles: list[Mapping[str, Any]]) -> 
 
 def tighten_selected_articles(
     question: str,
-    selected_articles: list[dict[str, Any]],
+    selected_article_ids: list[str],
     config: SelectorTighteningConfig,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    original_articles = [dict(article) for article in selected_articles]
-    original_count = len(original_articles)
+) -> tuple[list[str], dict[str, Any]]:
+    original_ids = [article_id for article_id in selected_article_ids if _safe_text(article_id)]
+    refs = [parse_article_id(article_id) for article_id in original_ids]
+    original_count = len(refs)
     if original_count <= config.min_keep:
-        debug = _build_debug(question, original_articles, original_articles, [], config, [])
-        return original_articles, debug
+        debug = _build_debug(question, refs, refs, [], config, [])
+        return original_ids, debug
 
     explicit_multilaw = is_explicit_multilaw_question(question)
-    cluster = compute_law_cluster_strength(original_articles)
+    cluster = compute_law_cluster_strength(refs)
     primary_law_id = _safe_text(cluster.get("primary_law_id"))
     rules_applied: list[str] = []
 
-    scored: list[tuple[float, int, dict[str, Any]]] = []
-    for index, article in enumerate(original_articles):
-        score = _base_rank_score(article, index)
+    scored: list[tuple[float, int, ArticleRef]] = []
+    for index, ref in enumerate(refs):
+        score = _base_rank_score(ref, index)
         if config.metadata_penalty:
-            score -= metadata_quality_penalty(article)
-        if config.same_law_coherence and primary_law_id and _law_id(article) == primary_law_id:
+            score -= metadata_quality_penalty(ref)
+        if config.same_law_coherence and primary_law_id and _law_id(ref) == primary_law_id:
             score += 0.75
-        scored.append((score, index, article))
+        scored.append((score, index, ref))
 
     if config.metadata_penalty:
         rules_applied.append("metadata_penalty")
@@ -137,34 +175,34 @@ def tighten_selected_articles(
     if config.max_selected < original_count:
         rules_applied.append("max_selected")
 
-    kept: list[dict[str, Any]] = []
+    kept: list[ArticleRef] = []
     kept_laws: set[str] = set()
     target_count = min(max(config.min_keep, config.max_selected), original_count)
-    for _, _, article in ranked:
-        law_id = _law_id(article)
+    for _, _, ref in ranked:
+        law_id = _law_id(ref)
         if law_cap is not None and law_id and law_id not in kept_laws and len(kept_laws) >= law_cap:
             continue
-        kept.append(article)
+        kept.append(ref)
         if law_id:
             kept_laws.add(law_id)
         if len(kept) >= target_count:
             break
 
     if len(kept) < min(config.min_keep, original_count):
-        kept_ids = {_article_key(article) for article in kept}
-        for _, _, article in ranked:
-            if _article_key(article) in kept_ids:
+        kept_ids = {ref.article_id for ref in kept}
+        for _, _, ref in ranked:
+            if ref.article_id in kept_ids:
                 continue
-            kept.append(article)
-            kept_ids.add(_article_key(article))
+            kept.append(ref)
+            kept_ids.add(ref.article_id)
             if len(kept) >= min(config.min_keep, original_count):
                 break
 
-    kept_keys = {_article_key(article) for article in kept}
-    kept_in_original_order = [dict(article) for article in original_articles if _article_key(article) in kept_keys]
-    removed = [article for article in original_articles if _article_key(article) not in kept_keys]
-    debug = _build_debug(question, original_articles, kept_in_original_order, removed, config, rules_applied)
-    return kept_in_original_order, debug
+    kept_ids = {ref.article_id for ref in kept}
+    kept_in_original_order = [ref for ref in refs if ref.article_id in kept_ids]
+    removed = [ref for ref in refs if ref.article_id not in kept_ids]
+    debug = _build_debug(question, refs, kept_in_original_order, removed, config, rules_applied)
+    return [ref.article_id for ref in kept_in_original_order], debug
 
 
 def run_selector_tightening_experiment(
@@ -189,20 +227,30 @@ def run_selector_tightening_experiment(
     report_rows: list[dict[str, Any]] = []
     tightened_records: list[dict[str, Any]] = []
 
+    rows_with_selected = 0
+    rows_without_selected = 0
+    selected_item_type = ""
     for record in records:
-        selected = _safe_list(record.get("selected_articles"))
-        selected_dicts = [dict(article) for article in selected if isinstance(article, Mapping)]
-        tightened, debug = tighten_selected_articles(_safe_text(record.get("question")), selected_dicts, config)
-        output_record = dict(record)
-        output_record["selected_articles"] = tightened
+        selected_article_ids = extract_selected_articles(record)
+        if selected_article_ids:
+            rows_with_selected += 1
+            if not selected_item_type:
+                selected_item_type = _selected_item_type(record)
+        else:
+            rows_without_selected += 1
+        tightened, debug = tighten_selected_articles(_safe_text(record.get("question")), selected_article_ids, config)
+        output_record = set_selected_articles(record, tightened)
         if config.include_debug_field:
             output_record["p6r6_selector_tightening_debug"] = debug
         tightened_records.append(output_record)
         report_rows.append(_build_report_row(record, debug, _safe_text(record.get("id")) in too_many_ids))
 
+    if rows_with_selected == 0:
+        raise ValueError('No selected articles found in retrieval_results. Expected row["selected_articles"] as list[str] or list[dict].')
+
     write_jsonl(tightened_path, tightened_records)
     write_csv(output_path / REPORT_CSV, REPORT_COLUMNS, report_rows)
-    summary = build_summary(report_rows, config, records, too_many_ids, p6r5b_summary, candidate_rules)
+    summary = build_summary(report_rows, config, records, too_many_ids, p6r5b_summary, candidate_rules, rows_with_selected=rows_with_selected, rows_without_selected=rows_without_selected, selected_item_type=selected_item_type)
     write_json(output_path / SUMMARY_JSON, summary)
     write_json(output_path / CONFIG_JSON, asdict(config))
     write_samples_markdown(output_path / SAMPLES_MD, report_rows)
@@ -223,6 +271,9 @@ def build_summary(
     too_many_ids: set[str],
     p6r5b_summary: Mapping[str, Any] | None = None,
     candidate_rules: Any | None = None,
+    rows_with_selected: int = 0,
+    rows_without_selected: int = 0,
+    selected_item_type: str = "",
 ) -> dict[str, Any]:
     baseline_selected = Counter(_safe_int(row.get("original_selected_count")) for row in report_rows)
     tightened_selected = Counter(_safe_int(row.get("tightened_selected_count")) for row in report_rows)
@@ -236,12 +287,21 @@ def build_summary(
         row.get("is_too_many_selected_case") is True and _safe_int(row.get("tightened_selected_count")) >= 12
         for row in report_rows
     )
+    p6r5_checked = sum(1 for row in report_rows if _safe_text(row.get("id")) in too_many_ids)
+    p6r5_count_12 = sum(1 for row in report_rows if _safe_text(row.get("id")) in too_many_ids and _safe_int(row.get("original_selected_count")) == 12)
+    warnings: list[str] = []
+    if len(too_many_ids) and p6r5_count_12 != len(too_many_ids):
+        warnings.append(f"P6.R5 too_many cases with original_selected_count=12 is {p6r5_count_12}, expected {len(too_many_ids)}")
     recommended_next_step, reason = _recommend_next_step(too_many_after, len(too_many_ids), recall_loss)
     return {
         "p6r6_status": "completed",
         "implementation_mode": "experiment_only",
         "retrieval_rows": len(retrieval_records),
         "too_many_selected_cases_input": len(too_many_ids),
+        "selected_articles_source_path": "selected_articles",
+        "selected_article_item_type": selected_item_type,
+        "rows_with_selected_articles": rows_with_selected,
+        "rows_without_selected_articles": rows_without_selected,
         "config": asdict(config),
         "baseline_selected_count_distribution": _counter_to_dict(baseline_selected),
         "tightened_selected_count_distribution": _counter_to_dict(tightened_selected),
@@ -252,6 +312,9 @@ def build_summary(
         "cases_reduced_unique_law_count": reduced_law,
         "possible_recall_loss_cases": recall_loss,
         "explicit_multilaw_cases": explicit_multilaw,
+        "p6r5_too_many_cases_checked": p6r5_checked,
+        "p6r5_too_many_cases_with_original_count_12": p6r5_count_12,
+        "warnings": warnings,
         "recommended_next_step": recommended_next_step,
         "recommended_next_step_reason": reason,
         "p6r5b_recommended_next_task": (p6r5b_summary or {}).get("recommended_next_task", ""),
@@ -373,10 +436,10 @@ def _risk_flag(debug: Mapping[str, Any]) -> tuple[str, str]:
     return "none", ""
 
 
-def _build_debug(question: str, original: list[dict[str, Any]], tightened: list[dict[str, Any]], removed: list[dict[str, Any]], config: SelectorTighteningConfig, rules_applied: list[str]) -> dict[str, Any]:
+def _build_debug(question: str, original: list[ArticleRef], tightened: list[ArticleRef], removed: list[ArticleRef], config: SelectorTighteningConfig, rules_applied: list[str]) -> dict[str, Any]:
     original_laws = _unique_law_ids(original)
     tightened_laws = _unique_law_ids(tightened)
-    return {"original_selected_count": len(original), "tightened_selected_count": len(tightened), "original_unique_law_count": len(original_laws), "tightened_unique_law_count": len(tightened_laws), "explicit_multilaw_question": is_explicit_multilaw_question(question), "rules_applied": rules_applied, "removed_article_ids_preview": [_article_id(article) for article in removed[:8]], "kept_article_ids_preview": [_article_id(article) for article in tightened[:8]], "config": asdict(config)}
+    return {"selected_articles_source_path": "selected_articles", "selected_article_item_type": "str", "original_selected_count": len(original), "tightened_selected_count": len(tightened), "original_unique_law_count": len(original_laws), "tightened_unique_law_count": len(tightened_laws), "explicit_multilaw_question": is_explicit_multilaw_question(question), "rules_applied": rules_applied, "removed_article_ids_preview": [_article_id(article) for article in removed[:8]], "kept_article_ids_preview": [_article_id(article) for article in tightened[:8]], "config": asdict(config)}
 
 
 def _recommend_next_step(too_many_after: int, too_many_before: int, recall_loss: int) -> tuple[str, str]:
@@ -390,19 +453,7 @@ def _recommend_next_step(too_many_after: int, too_many_before: int, recall_loss:
 
 
 
-def _base_rank_score(article: Mapping[str, Any], index: int) -> float:
-    for field in ("score", "rerank_score", "final_score"):
-        value = article.get(field)
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            try:
-                return float(value)
-            except ValueError:
-                pass
-    rank = article.get("rank")
-    if isinstance(rank, int) and rank > 0:
-        return 1000.0 - rank
+def _base_rank_score(ref: ArticleRef, index: int) -> float:
     return 1000.0 - index
 
 
@@ -413,7 +464,7 @@ def _law_id_title_mismatch(law_id: str, law_title: str) -> bool:
     return bool(title_ids and law_id.upper() not in title_ids)
 
 
-def _unique_law_ids(articles: Sequence[Mapping[str, Any]]) -> list[str]:
+def _unique_law_ids(articles: Sequence[ArticleRef]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for article in articles:
@@ -424,16 +475,24 @@ def _unique_law_ids(articles: Sequence[Mapping[str, Any]]) -> list[str]:
     return result
 
 
-def _law_id(article: Mapping[str, Any]) -> str:
-    return _safe_text(article.get("law_id"))
+def _law_id(ref: ArticleRef) -> str:
+    return _safe_text(ref.law_id) or "__UNKNOWN__"
 
 
-def _article_id(article: Mapping[str, Any]) -> str:
-    return _safe_text(article.get("article_id")) or _article_key(article)
+def _article_id(ref: ArticleRef) -> str:
+    return ref.article_id
 
 
-def _article_key(article: Mapping[str, Any]) -> str:
-    return "|".join([_safe_text(article.get("article_id")), _safe_text(article.get("law_id")), _safe_text(article.get("article_no")), _safe_text(article.get("article_number"))])
+def _selected_item_type(row: Mapping[str, Any]) -> str:
+    selected = _safe_list(row.get("selected_articles"))
+    if not selected:
+        return ""
+    first = selected[0]
+    if isinstance(first, str):
+        return "str"
+    if isinstance(first, Mapping):
+        return "dict"
+    return type(first).__name__
 
 
 def _counter_to_dict(counter: Counter[int]) -> dict[str, int]:
