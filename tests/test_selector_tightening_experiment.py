@@ -15,6 +15,7 @@ from backend.evaluation.selector_tightening_experiment import (
     run_selector_tightening_experiment,
     run_selector_tightening_grid,
     set_selected_articles,
+    threshold_aligned_tuning_configs,
     tighten_selected_articles,
 )
 
@@ -115,6 +116,19 @@ def test_build_summary_warns_when_p6r5_count_is_not_12() -> None:
     assert summary["warnings"]
 
 
+def test_build_summary_counts_error_analysis_threshold_ge_10() -> None:
+    rows = [
+        {"id": "1", "original_selected_count": 12, "tightened_selected_count": 10, "original_unique_law_count": 10, "tightened_unique_law_count": 8, "selected_count_delta": 2, "unique_law_count_delta": 2, "risk_flag": "none", "explicit_multilaw_question": False, "is_too_many_selected_case": True},
+        {"id": "2", "original_selected_count": 12, "tightened_selected_count": 9, "original_unique_law_count": 10, "tightened_unique_law_count": 8, "selected_count_delta": 3, "unique_law_count_delta": 2, "risk_flag": "none", "explicit_multilaw_question": False, "is_too_many_selected_case": True},
+    ]
+
+    summary = build_summary(rows, SelectorTighteningConfig(), [{}, {}], {"1", "2"}, rows_with_selected=2, selected_item_type="str")
+
+    assert summary["too_many_by_error_threshold_after"] == 1
+    assert summary["rows_selected_count_ge_10_after"] == 1
+    assert summary["error_analysis_too_many_selected_threshold"] == 10
+
+
 def test_runtime_output_keeps_selected_articles_as_list_strings(tmp_path) -> None:
     retrieval = tmp_path / "retrieval.jsonl"
     low = tmp_path / "low.csv"
@@ -174,6 +188,59 @@ def _write_csv(path, columns, rows) -> None:
 
 
 
+def test_threshold_aligned_tuning_configs_match_p6r6d_scope() -> None:
+    configs = threshold_aligned_tuning_configs()
+
+    assert set(configs) == {
+        "soft_9_7",
+        "soft_9_8",
+        "count_only_9",
+        "law_cap_8_count_9",
+        "balanced_9_7_no_metadata",
+    }
+    assert all(config.max_selected == 9 for config in configs.values())
+    assert configs["soft_9_7"].max_unique_law_ids == 7
+    assert configs["soft_9_8"].max_unique_law_ids == 8
+    assert configs["count_only_9"].max_unique_law_ids == 99
+    assert configs["count_only_9"].metadata_penalty is False
+    assert configs["count_only_9"].same_law_coherence is False
+    assert configs["balanced_9_7_no_metadata"].metadata_penalty is False
+    assert configs["balanced_9_7_no_metadata"].same_law_coherence is True
+
+
+def test_recommendation_prefers_safe_threshold_aligned_least_aggressive_config() -> None:
+    rows = [
+        {"config_name": "safe_strict", "rows_selected_count_ge_10_after": 0, "possible_recall_loss_cases": 0, "avg_selected_count_after": 7.2, "cases_reduced_selected_count": 120},
+        {"config_name": "safe_soft", "rows_selected_count_ge_10_after": 0, "possible_recall_loss_cases": 0, "avg_selected_count_after": 8.7, "cases_reduced_selected_count": 80},
+        {"config_name": "unsafe", "rows_selected_count_ge_10_after": 4, "possible_recall_loss_cases": 0, "avg_selected_count_after": 9.3, "cases_reduced_selected_count": 40},
+    ]
+
+    recommendation = recommend_tuning_config(rows)
+
+    assert recommendation["recommended_config"] == "safe_soft"
+    assert recommendation["recommended_next_step"] == "inspect_P6R6d_outputs_before_regeneration"
+
+
+def test_threshold_aligned_grid_outputs_error_threshold_columns(tmp_path) -> None:
+    retrieval, low, p6r5, p6r5b, rules = _grid_inputs(tmp_path)
+    run_selector_tightening_grid(
+        retrieval,
+        low,
+        p6r5,
+        p6r5b,
+        rules,
+        tmp_path / "grid",
+        configs={"soft_9_7": threshold_aligned_tuning_configs()["soft_9_7"]},
+    )
+
+    with (tmp_path / "grid" / "selector_tuning_comparison.csv").open(encoding="utf-8", newline="") as file:
+        row = next(csv.DictReader(file))
+
+    assert row["config_name"] == "soft_9_7"
+    assert row["too_many_by_error_threshold_after"] == "0"
+    assert row["rows_selected_count_ge_10_after"] == "0"
+
+
 def test_grid_runner_returns_one_summary_per_config(tmp_path) -> None:
     retrieval, low, p6r5, p6r5b, rules = _grid_inputs(tmp_path)
     configs = {
@@ -206,6 +273,8 @@ def test_grid_comparison_csv_has_required_columns(tmp_path) -> None:
 
     assert "config_name" in header
     assert "too_many_selected_cases_after_tightening" in header
+    assert "too_many_by_error_threshold_after" in header
+    assert "rows_selected_count_ge_10_after" in header
     assert "possible_recall_loss_cases" in header
     assert "selected_count_distribution_after" in header
 

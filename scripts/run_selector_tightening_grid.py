@@ -12,7 +12,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.evaluation.selector_tightening_experiment import run_selector_tightening_grid
+from backend.evaluation.selector_tightening_experiment import (
+    run_selector_tightening_grid,
+    threshold_aligned_tuning_configs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     _configure_logging(args.log_level)
+    configs = threshold_aligned_tuning_configs() if args.threshold_aligned_configs else None
     summary = run_selector_tightening_grid(
         retrieval_results_path=args.retrieval_results,
         low_confidence_path=args.low_confidence,
@@ -28,6 +32,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         p6r5b_summary_path=args.p6r5b_summary,
         candidate_rules_path=args.candidate_rules,
         output_dir=args.output_dir,
+        configs=configs,
     )
     logger.info("Summary: %s", summary)
     print(summary)
@@ -42,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--p6r5b-summary", default="data/outputs/error_analysis_v2_p6r5b_strategy/too_many_selected_strategy_summary.json")
     parser.add_argument("--candidate-rules", default="data/outputs/error_analysis_v2_p6r5b_strategy/candidate_selector_rules.json")
     parser.add_argument("--output-dir", default="data/outputs/error_analysis_v2_p6r6b_selector_tuning")
+    parser.add_argument("--threshold-aligned-configs", action="store_true", help="Use P6.R6d configs where max_selected <= 9 to align with error_analysis selected_count >= 10 threshold.")
     parser.add_argument("--log-level", default="INFO")
     return parser
 

@@ -24,6 +24,7 @@ REPORT_CSV = "selector_tightening_report.csv"
 SUMMARY_JSON = "selector_tightening_summary.json"
 SAMPLES_MD = "selector_tightening_samples.md"
 CONFIG_JSON = "selector_tightening_config.json"
+ERROR_ANALYSIS_TOO_MANY_SELECTED_THRESHOLD = 10
 
 UNKNOWN_LAW_IDS = {"", "none", "null", "unknown", "khong so", "không số", "khong ro", "không rõ"}
 EXPLICIT_MULTILAW_SIGNALS = (
@@ -287,6 +288,10 @@ def build_summary(
         row.get("is_too_many_selected_case") is True and _safe_int(row.get("tightened_selected_count")) >= 12
         for row in report_rows
     )
+    rows_count_ge_error_threshold = sum(
+        _safe_int(row.get("tightened_selected_count")) >= ERROR_ANALYSIS_TOO_MANY_SELECTED_THRESHOLD
+        for row in report_rows
+    )
     p6r5_checked = sum(1 for row in report_rows if _safe_text(row.get("id")) in too_many_ids)
     p6r5_count_12 = sum(1 for row in report_rows if _safe_text(row.get("id")) in too_many_ids and _safe_int(row.get("original_selected_count")) == 12)
     warnings: list[str] = []
@@ -308,6 +313,9 @@ def build_summary(
         "baseline_unique_law_count_distribution": _counter_to_dict(baseline_law),
         "tightened_unique_law_count_distribution": _counter_to_dict(tightened_law),
         "too_many_selected_cases_after_tightening": too_many_after,
+        "too_many_by_error_threshold_after": rows_count_ge_error_threshold,
+        "rows_selected_count_ge_10_after": rows_count_ge_error_threshold,
+        "error_analysis_too_many_selected_threshold": ERROR_ANALYSIS_TOO_MANY_SELECTED_THRESHOLD,
         "cases_reduced_selected_count": reduced_selected,
         "cases_reduced_unique_law_count": reduced_law,
         "possible_recall_loss_cases": recall_loss,
@@ -546,6 +554,8 @@ GRID_COMPARISON_COLUMNS = [
     "metadata_penalty",
     "same_law_coherence",
     "too_many_selected_cases_after_tightening",
+    "too_many_by_error_threshold_after",
+    "rows_selected_count_ge_10_after",
     "cases_reduced_selected_count",
     "cases_reduced_unique_law_count",
     "possible_recall_loss_cases",
@@ -568,6 +578,17 @@ def default_tuning_configs() -> dict[str, SelectorTighteningConfig]:
         "soft_10_7": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=7, min_keep=4, metadata_penalty=True, same_law_coherence=True),
         "count_only_10": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=99, min_keep=4, metadata_penalty=False, same_law_coherence=False),
         "law_cap_only_7": SelectorTighteningConfig(max_selected=12, max_unique_law_ids=7, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+    }
+
+
+def threshold_aligned_tuning_configs() -> dict[str, SelectorTighteningConfig]:
+    """Configs aligned with error_analysis too_many threshold selected_count >= 10."""
+    return {
+        "soft_9_7": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=7, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "soft_9_8": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=8, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "count_only_9": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=99, min_keep=4, metadata_penalty=False, same_law_coherence=False),
+        "law_cap_8_count_9": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=8, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "balanced_9_7_no_metadata": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=7, min_keep=4, metadata_penalty=False, same_law_coherence=True),
     }
 
 
@@ -604,6 +625,7 @@ def run_selector_tightening_grid(
     grid_summary = {
         "p6r6b_status": "completed",
         "implementation_mode": "grid_experiment_only",
+        "error_analysis_too_many_selected_threshold": ERROR_ANALYSIS_TOO_MANY_SELECTED_THRESHOLD,
         "config_count": len(configs),
         "recommended_config": recommendation["recommended_config"],
         "recommended_next_step": recommendation["recommended_next_step"],
@@ -622,6 +644,43 @@ def run_selector_tightening_grid(
 
 
 def recommend_tuning_config(comparison_rows: list[Mapping[str, Any]]) -> dict[str, str]:
+    if not comparison_rows:
+        return {"recommended_config": "", "recommended_next_step": "manual_review_required", "recommended_reason": "no configs were evaluated"}
+
+    if any("rows_selected_count_ge_10_after" in row or "too_many_by_error_threshold_after" in row for row in comparison_rows):
+        eligible = [
+            row
+            for row in comparison_rows
+            if _error_threshold_count(row) == 0
+        ]
+        if eligible:
+            best = sorted(
+                eligible,
+                key=lambda row: (
+                    _safe_int(row.get("possible_recall_loss_cases")),
+                    -_safe_float(row.get("avg_selected_count_after")),
+                    _safe_int(row.get("cases_reduced_selected_count")),
+                ),
+            )[0]
+            return {
+                "recommended_config": _safe_text(best.get("config_name")),
+                "recommended_next_step": "inspect_P6R6d_outputs_before_regeneration",
+                "recommended_reason": "config eliminates selected_count >= 10 cases; among safe configs it keeps avg_selected_count_after as high as possible with minimal estimated recall risk",
+            }
+        lowest_threshold = sorted(
+            comparison_rows,
+            key=lambda row: (
+                _error_threshold_count(row),
+                _safe_int(row.get("possible_recall_loss_cases")),
+                -_safe_float(row.get("avg_selected_count_after")),
+            ),
+        )[0]
+        return {
+            "recommended_config": _safe_text(lowest_threshold.get("config_name")),
+            "recommended_next_step": "P6.R6d_review_threshold_aligned_grid",
+            "recommended_reason": "no config eliminates selected_count >= 10 cases; inspect threshold-aligned comparison before regeneration",
+        }
+
     eligible: list[Mapping[str, Any]] = []
     for row in comparison_rows:
         too_many_after = _safe_int(row.get("too_many_selected_cases_after_tightening"))
@@ -629,14 +688,12 @@ def recommend_tuning_config(comparison_rows: list[Mapping[str, Any]]) -> dict[st
         if too_many_after <= 108 and recall_loss <= 25:
             eligible.append(row)
     if eligible:
-        best = sorted(eligible, key=lambda row: (_safe_int(row.get("possible_recall_loss_cases")), _safe_int(row.get("too_many_selected_cases_after_tightening")), -_safe_int(row.get("avg_selected_count_after"))))[0]
+        best = sorted(eligible, key=lambda row: (_safe_int(row.get("possible_recall_loss_cases")), _safe_int(row.get("too_many_selected_cases_after_tightening")), -_safe_float(row.get("avg_selected_count_after"))))[0]
         return {
             "recommended_config": _safe_text(best.get("config_name")),
             "recommended_next_step": "P6.R6b_regenerate_answers_on_tightened_subset",
             "recommended_reason": "config reduces too_many_selected by at least 50% with possible_recall_loss_cases <= 25",
         }
-    if not comparison_rows:
-        return {"recommended_config": "", "recommended_next_step": "manual_review_required", "recommended_reason": "no configs were evaluated"}
     lowest_risk = sorted(comparison_rows, key=lambda row: _safe_int(row.get("possible_recall_loss_cases")))[0]
     if _safe_int(lowest_risk.get("too_many_selected_cases_after_tightening")) >= 162:
         return {
@@ -665,6 +722,7 @@ def write_tuning_recommendation_markdown(path: Path, summary: Mapping[str, Any])
     for row in summary.get("comparison_rows", []):
         lines.append(
             f"- {row.get('config_name')}: too_many_after={row.get('too_many_selected_cases_after_tightening')}, "
+            f"selected_count_ge_10_after={row.get('rows_selected_count_ge_10_after')}, "
             f"recall_loss={row.get('possible_recall_loss_cases')}, avg_selected_after={row.get('avg_selected_count_after')}"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -680,6 +738,8 @@ def _comparison_row(config_name: str, summary: Mapping[str, Any]) -> dict[str, A
         "metadata_penalty": config.get("metadata_penalty", ""),
         "same_law_coherence": config.get("same_law_coherence", ""),
         "too_many_selected_cases_after_tightening": summary.get("too_many_selected_cases_after_tightening", 0),
+        "too_many_by_error_threshold_after": summary.get("too_many_by_error_threshold_after", 0),
+        "rows_selected_count_ge_10_after": summary.get("rows_selected_count_ge_10_after", 0),
         "cases_reduced_selected_count": summary.get("cases_reduced_selected_count", 0),
         "cases_reduced_unique_law_count": summary.get("cases_reduced_unique_law_count", 0),
         "possible_recall_loss_cases": summary.get("possible_recall_loss_cases", 0),
@@ -694,6 +754,11 @@ def _comparison_row(config_name: str, summary: Mapping[str, Any]) -> dict[str, A
     }
 
 
+def _error_threshold_count(row: Mapping[str, Any]) -> int:
+    value = row.get("rows_selected_count_ge_10_after", row.get("too_many_by_error_threshold_after", 0))
+    return _safe_int(value)
+
+
 def _distribution_average(distribution: Any) -> float:
     if not isinstance(distribution, Mapping):
         return 0.0
@@ -702,3 +767,16 @@ def _distribution_average(distribution: Any) -> float:
         return 0.0
     total_value = sum(_safe_int(key) * _safe_int(value) for key, value in distribution.items())
     return round(total_value / total_count, 3)
+
+
+def _safe_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return 0.0
+    return 0.0
