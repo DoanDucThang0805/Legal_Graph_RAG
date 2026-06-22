@@ -47,6 +47,72 @@ def read_unsupported_question_ids(report_path: str | Path) -> list[str]:
     return question_ids
 
 
+def read_question_ids_csv(ids_csv_path: str | Path, id_column: str = "id") -> list[str]:
+    """Read unique question IDs from a CSV file using the configured ID column."""
+    path = Path(ids_csv_path)
+    column = _safe_text(id_column) or "id"
+    if not path.is_file():
+        raise FileNotFoundError(f"ids CSV does not exist: {path}")
+
+    question_ids: list[str] = []
+    seen: set[str] = set()
+    with path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        if column not in (reader.fieldnames or []):
+            raise ValueError(f"ids CSV missing required {column} column: {path}")
+
+        for row_number, row in enumerate(reader, start=2):
+            question_id = _safe_text(row.get(column))
+            if not question_id:
+                logger.warning("Skip ids CSV row %d because %s is empty", row_number, column)
+                continue
+            if question_id in seen:
+                continue
+            seen.add(question_id)
+            question_ids.append(question_id)
+
+    return question_ids
+
+
+def generate_answer_ids_subset(
+    ids_csv_path: str | Path,
+    retrieval_results_path: str | Path,
+    output_path: str | Path,
+    legal_articles_path: str | Path,
+    generator: AnswerGenerator,
+    id_column: str = "id",
+    max_tokens: int = 128,
+    max_article_chars: int = 700,
+    max_total_context_chars: int = 2500,
+) -> dict[str, Any]:
+    """Regenerate answers for arbitrary IDs read from CSV and write a summary next to output."""
+    question_ids = read_question_ids_csv(ids_csv_path, id_column=id_column)
+    summary = generate_answers_for_subset(
+        retrieval_results_path=retrieval_results_path,
+        output_path=output_path,
+        question_ids=question_ids,
+        legal_articles_path=legal_articles_path,
+        generator=generator,
+        max_tokens=max_tokens,
+        max_article_chars=max_article_chars,
+        max_total_context_chars=max_total_context_chars,
+    )
+    summary.update(
+        {
+            "ids_csv_path": str(ids_csv_path),
+            "retrieval_results_path": str(retrieval_results_path),
+            "output_path": str(output_path),
+            "max_total_context_chars": max_total_context_chars,
+            "max_article_chars": max_article_chars,
+            "max_tokens": max_tokens,
+        }
+    )
+    summary_path = Path(output_path).parent / "regeneration_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    summary["summary_path"] = str(summary_path)
+    return summary
+
+
 def generate_answers_for_subset(
     retrieval_results_path: str | Path,
     output_path: str | Path,
