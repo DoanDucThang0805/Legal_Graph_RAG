@@ -3243,349 +3243,666 @@ PY
 ### Status
 
 ```text
-NOT STARTED
+VERIFIED
 ```
 
 ### Context
 
-Sau P6.R3.2, detector `unsupported_citation_in_answer` đã được tighten và fix edge cases law_id. Báo cáo hiện tại ghi nhận:
+Sau P6.R3.2, detector `unsupported_citation_in_answer` đã ổn định và phát hiện 76 câu trả lời có citation mạnh không nằm trong `selected_articles`.
+
+Trước P6.R4:
 
 ```text
-unsupported_citation_in_answer: 76
+total_questions: 2000
+low_confidence_count: 499
+unsupported_citation_count: 76
 ```
 
-Nhóm lỗi này phản ánh các trường hợp answer body có viện dẫn mạnh dạng `Điều X + law_id/law_title`, nhưng cặp citation đó không nằm trong `selected_articles`.
+Mục tiêu của P6.R4 là harden QA prompt và prompt input formatting để giảm lỗi LLM tự viện dẫn Điều/Văn bản ngoài context.
 
-P6.R4 tập trung harden tầng QA prompt / answer generation input formatting để giảm khả năng LLM tự sinh citation ngoài context.
-
-### Goal
-
-```text
-Giảm unsupported_citation_in_answer bằng prompt guardrails và allowed citation formatting.
-```
-
-### Deliverables
-
-Bắt buộc:
+### Files changed
 
 ```text
 backend/prompts/legal_qa_prompt.txt
-```
-
-Có thể sửa nếu cần:
-
-```text
-backend/qa/answer_generator.py
-```
-
-Có thể thêm/sửa test nhẹ nếu phù hợp:
-
-```text
+backend/qa/answer_templates.py
 tests/test_answer_generator.py
-tests/test_qa_prompt_guardrails.py
 ```
 
-### Acceptance Criteria
+### What changed
 
 ```text
-[ ] Prompt yêu cầu LLM chỉ trả lời dựa trên selected_articles/context được cung cấp.
-[ ] Prompt cấm LLM tự viện dẫn Điều/Văn bản ngoài selected_articles.
-[ ] Prompt cấm tự suy đoán số điều, số nghị định, số thông tư, số luật từ kiến thức ngoài.
-[ ] Nếu thiếu căn cứ trong context, answer phải nói không đủ căn cứ thay vì tự bổ sung citation.
-[ ] Nếu cần, AnswerGenerator bổ sung allowed citation list deterministic từ selected article contexts.
-[ ] Allowed citation list chỉ được build từ selected_articles, không thêm article_id mới.
-[ ] Không sửa retrieval pipeline.
-[ ] Không sửa article selector.
-[ ] Không sửa submission schema.
-[ ] Không gọi Phase 7 reranker/verifier.
-[ ] Không dùng Neo4j/Phase 8.
-[ ] Không generate lại full 2000 QA trong task này.
+- Thêm guardrail trong QA prompt:
+  + chỉ dùng context/selected_articles được cung cấp;
+  + chỉ viện dẫn căn cứ nằm trong allowed citation list;
+  + không tự suy đoán Điều/Văn bản;
+  + không dùng Phapdien/anle làm citation chính thức nếu không map về article_id canonical;
+  + nếu thiếu căn cứ thì phải nói không đủ căn cứ.
+
+- Thêm block deterministic “CÁC CĂN CỨ ĐƯỢC PHÉP VIỆN DẪN” trong prompt input.
+- Allowed citation list được sinh từ selected article contexts.
+- Giữ label [A1], [A2], ... nhất quán giữa allowlist và context.
 ```
 
-### User-run commands
-
-Import smoke:
+### Validation
 
 ```bash
 python - <<'PY'
 from backend.qa.answer_generator import AnswerGenerator
 print("answer generator import ok")
 PY
-```
-
-Nếu có thêm/sửa test:
-
-```bash
-pytest tests/test_answer_generator.py -q
-```
-
-hoặc:
-
-```bash
-pytest tests/test_qa_prompt_guardrails.py -q
-```
-
-### Validation after implementation
-
-Sau khi P6.R4 code/prompt được cập nhật, không chạy lại full 2000 ngay.
-
-Bước validation khuyến nghị:
-
-```text
-1. Regenerate QA cho subset 76 unsupported citation cases.
-2. Build temporary generated_answers file cho subset hoặc merge subset output vào bản copy.
-3. Chạy lại error analysis.
-4. So sánh unsupported_citation_in_answer trước/sau.
-```
-
-Expected comparison target:
-
-```text
-Before P6.R4:
-unsupported_citation_in_answer: 76
-
-After P6.R4 subset validation:
-unsupported_citation_in_answer nên giảm trên subset 76.
-```
-
-Không claim P6.R4 VERIFIED nếu chưa có log validation từ user.
-
-### Technical Notes
-
-```text
-P6.R4 chỉ harden QA prompt / answer generation input.
-Không thay đổi selected_articles.
-Không thay đổi relevant_docs / relevant_articles.
-Không thay đổi canonical article_id.
-Không thêm citation ngoài legal_articles canonical.
-Không để Phapdien/anle tự sinh citation chính thức.
-Không implement reranker/verifier trong task này.
-Không implement Neo4j graph expansion trong task này.
-```
-
-### Follow-up
-
-Sau P6.R4, bước tiếp theo hợp lý là:
-
-```text
-1. Regenerate subset 76 unsupported citation cases.
-2. Re-run error analysis.
-3. Nếu unsupported citation giảm ổn định, cân nhắc full QA regeneration.
-4. Sau đó mới xử lý P6.R5 — Analyze too_many_selected_articles / retrieval noise.
-```
-
-
-## 2. P6.R4.V1
-
-Dùng prompt này để yêu cầu Codex viết bước subset validation, không chạy full 2000:
-
-```text
-Bạn đang làm việc trong repo Legal_Graph_RAG.
-
-Ngôn ngữ trao đổi: tiếng Việt.
-
-Task hiện tại:
-
-P6.R4.V1 — Regenerate subset 76 unsupported citation cases and re-run error analysis
-
-Bối cảnh:
-
-P6.R4 đã implemented và unit test nhẹ đã pass.
-
-Files changed ở P6.R4:
-- backend/prompts/legal_qa_prompt.txt
-- backend/qa/answer_templates.py
-- tests/test_answer_generator.py
-
-Test đã pass:
-
-python - <<'PY'
-from backend.qa.answer_generator import AnswerGenerator
-print("answer generator import ok")
-PY
 
 pytest tests/test_answer_generator.py -q
+```
 
 Observed:
+
+```text
 answer generator import ok
 2 passed in 0.03s
+```
 
-Current baseline files:
-- data/outputs/generated_answers_v2_merged.jsonl
-- data/outputs/results_v2.json
-- data/outputs/submission_v2.zip
-- data/outputs/error_analysis_v2/
-- data/outputs/error_analysis_v2/unsupported_citations_report.csv
+---
 
-Current issue counts before P6.R4 subset validation:
-- legacy_or_unknown_law_id: 231
-- too_many_selected_articles: 216
-- unsupported_citation_in_answer: 76
-- answer_maybe_truncated: 53
-- answer_insufficient_basis: 3
+## P6.R4.V1 — Regenerate subset 76 unsupported citation cases
 
-Mục tiêu:
+### Status
 
-Tạo quy trình an toàn để regenerate QA chỉ cho subset 76 câu đang có unsupported_citation_in_answer, sau đó merge vào bản copy của generated_answers_v2_merged.jsonl và chạy lại error analysis để so sánh trước/sau.
+```text
+VERIFIED
+```
 
-Không được chạy full 2000.
-Không được sửa retrieval.
-Không được sửa selector.
-Không được sửa submission schema.
-Không được dùng Phase 7.
-Không được dùng Neo4j.
-Không được claim VERIFIED nếu user chưa chạy lệnh và cung cấp log.
+### Files changed
 
-Yêu cầu:
+```text
+backend/evaluation/subset_answer_regeneration.py
+backend/evaluation/generated_answer_merge.py
+scripts/regenerate_unsupported_citation_subset.py
+scripts/merge_generated_answer_subset.py
+tests/test_merge_generated_answer_subset.py
+```
 
-1. Inspect code hiện có:
-- scripts/05_generate_answers.py
-- backend/qa/answer_generator.py
-- backend/qa/answer_templates.py
-- backend/evaluation/error_analysis.py
-- data/outputs/error_analysis_v2/unsupported_citations_report.csv structure nếu cần
+### What changed
 
-2. Nếu script generate hiện có đã hỗ trợ filter theo IDs hoặc input subset:
-- Không tạo script mới.
-- Chỉ hướng dẫn user chạy bằng options hiện có.
+```text
+- Thêm flow regenerate chỉ cho IDs lấy từ unsupported_citations_report.csv.
+- Output subset ghi riêng, không overwrite baseline.
+- Thêm merge an toàn để replace answer theo id.
+- Merge giữ nguyên số dòng base.
+- Reject subset ID không có trong base.
+- Duplicate subset ID thì dùng dòng cuối và report lại.
+```
 
-3. Nếu script hiện chưa hỗ trợ subset IDs:
-- Tạo script nhỏ, scoped rõ, ví dụ:
-  scripts/regenerate_unsupported_citation_subset.py
+### Runtime validation
 
-Script này chỉ làm nhiệm vụ:
-- Đọc data/outputs/error_analysis_v2/unsupported_citations_report.csv.
-- Lấy unique question ids từ report.
-- Regenerate answer cho đúng các ids đó bằng pipeline QA hiện có.
-- Ghi output subset ra file mới, không overwrite baseline.
+Regenerate subset 76:
 
-Output đề xuất:
-- data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
-
-4. Nếu cần script merge:
-Có thể tạo script nhỏ:
-- scripts/merge_generated_answer_subset.py
-
-Hoặc nếu codebase đã có merge utility thì dùng lại.
-
-Yêu cầu merge:
-- Input baseline: data/outputs/generated_answers_v2_merged.jsonl
-- Input subset: data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
-- Output merged copy: data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
-- Replace theo id.
-- Không làm mất id nào.
-- Output phải đủ 2000 rows.
-- Không overwrite generated_answers_v2_merged.jsonl.
-
-5. Sau merge, user sẽ tự chạy error analysis với:
-- retrieval_results_path=data/outputs/retrieval_results.jsonl
-- generated_answers_path=data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
-- output_dir=data/outputs/error_analysis_v2_p6r4
-
-6. Nếu thêm script/test thì có test nhẹ:
-- Kiểm tra merge không mất id.
-- Kiểm tra duplicate id được xử lý đúng.
-- Kiểm tra output row count giữ nguyên.
-
-Deliverables có thể có:
-- scripts/regenerate_unsupported_citation_subset.py
-- scripts/merge_generated_answer_subset.py
-- tests/test_merge_generated_answer_subset.py
-
-Không tạo deliverables nếu code hiện có đã đáp ứng.
-
-User-run commands mong muốn:
-
-1. Regenerate subset 76:
+```bash
 python scripts/regenerate_unsupported_citation_subset.py \
   --unsupported-report data/outputs/error_analysis_v2/unsupported_citations_report.csv \
   --retrieval-results data/outputs/retrieval_results.jsonl \
-  --output data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+  --output data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl \
+  --client vllm \
+  --max-total-context-chars 600 \
+  --max-article-chars 120 \
+  --max-tokens 64
+```
 
-2. Merge subset vào bản copy:
+Observed:
+
+```text
+requested: 76
+processed: 76
+missing: 0
+missing_ids: []
+output_path: data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+```
+
+Merge subset:
+
+```bash
 python scripts/merge_generated_answer_subset.py \
   --base data/outputs/generated_answers_v2_merged.jsonl \
   --subset data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl \
   --output data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
+```
 
-3. Chạy error analysis:
+Observed:
+
+```text
+base_rows: 2000
+subset_rows: 76
+output_rows: 2000
+replaced: 76
+duplicate_subset_ids: []
+```
+
+Error analysis after subset regeneration:
+
+```text
+total_questions: 2000
+low_confidence_count: 455
+unsupported_citation_count: 1
+```
+
+---
+
+## P6.R4.V1b — Compact QA prompt / allowed citation list and add prompt budget debug
+
+### Status
+
+```text
+VERIFIED
+```
+
+### Context
+
+Initial subset regeneration failed due to vLLM context overflow.
+
+First failure:
+
+```text
+requested 128 output tokens
+prompt contains at least 3969 input tokens
+total at least 4097 tokens > 4096
+```
+
+Retry with smaller budget passed several cases but failed at:
+
+```text
+id=711 selected_articles=12 hydrated_articles=12
+```
+
+with:
+
+```text
+requested 64 output tokens
+prompt contains at least 4033 input tokens
+total at least 4097 tokens > 4096
+```
+
+Partial output at that point:
+
+```text
+17 rows
+```
+
+Partial output was not merged.
+
+### Files changed
+
+```text
+backend/prompts/legal_qa_prompt.txt
+backend/qa/answer_templates.py
+backend/evaluation/subset_answer_regeneration.py
+tests/test_answer_generator.py
+```
+
+### What changed
+
+```text
+- Rút gọn base QA prompt nhưng giữ guardrail chính.
+- Compact allowed citation list từ format nhiều dòng thành 1 dòng:
+  [A1] Điều 31 | 65/2023/NĐ-CP | Nghị định 65/2023/NĐ-CP
+
+- Compact context block, không lặp metadata dài:
+  [A1] Điều 31:
+  <article_text>
+
+- Giữ label [A1] nhất quán giữa allowlist và context.
+- Thêm debug log trước khi gọi LLM:
+  id, selected/hydrated count, context budgets, max_tokens,
+  total_context_chars, allowed_citation_count, prompt_chars.
+```
+
+### Result
+
+After compacting prompt/allowlist, subset regeneration completed:
+
+```text
+requested: 76
+processed: 76
+missing: 0
+```
+
+---
+
+## P6.R4.V2a — Disable Qwen3 thinking mode for vLLM generation
+
+### Status
+
+```text
+VERIFIED
+```
+
+### Context
+
+The remaining case after P6.R4 subset validation was:
+
+```text
+id=418
+```
+
+The first Qwen3 regeneration attempt produced output with:
+
+```text
+<think>...</think>
+```
+
+and English reasoning, so it was not merged.
+
+A direct curl call confirmed that qwen3-14b supports disabling thinking mode via:
+
+```json
+{
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  }
+}
+```
+
+### Files changed
+
+```text
+backend/infrastructure/gen_llm_models/vllm_client.py
+backend/infrastructure/gen_llm_models/qwen_client.py
+tests/test_vllm_client.py
+```
+
+### What changed
+
+```text
+- Added disable_thinking: bool = False to VLLMClientConfig.
+- Added env support:
+  + VLLM_DISABLE_THINKING=1
+  + VLLM_ENABLE_THINKING=false
+
+- Added QwenClientConfig support:
+  + QWEN_DISABLE_THINKING
+  + QWEN_ENABLE_THINKING
+  + fallback to VLLM_* envs
+
+- When disable thinking is enabled, the vLLM payload includes:
+  chat_template_kwargs.enable_thinking=false
+
+- If caller already passes chat_template_kwargs, the code preserves other fields and forces enable_thinking=false.
+- Default behavior remains unchanged when the env/config is not enabled.
+```
+
+### Validation
+
+```bash
+pytest tests/test_vllm_client.py -q
+```
+
+Observed:
+
+```text
+5 passed in 0.11s
+```
+
+### Runtime validation
+
+Environment:
+
+```bash
+export VLLM_BASE_URL="http://localhost:8000/v1"
+export OPENAI_BASE_URL="http://localhost:8000/v1"
+export VLLM_API_KEY="EMPTY"
+export VLLM_MODEL="qwen3-14b"
+export VLLM_DISABLE_THINKING=1
+```
+
+Regenerate remaining case:
+
+```bash
+python scripts/regenerate_unsupported_citation_subset.py \
+  --unsupported-report data/outputs/error_analysis_v2_p6r4/unsupported_citations_report.csv \
+  --retrieval-results data/outputs/retrieval_results.jsonl \
+  --output data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl \
+  --client vllm \
+  --max-total-context-chars 2600 \
+  --max-article-chars 1200 \
+  --max-tokens 256
+```
+
+The final id=418 answer no longer contains `<think>`, does not expose English reasoning, does not truncate `40/2021/TT-BTC`, and correctly answers based on Article 5 of Circular 40/2021/TT-BTC:
+
+```text
+Hộ kinh doanh, cá nhân kinh doanh phải nộp thuế theo phương pháp kê khai nếu thuộc quy mô lớn hoặc chưa đáp ứng quy mô lớn nhưng tự nguyện lựa chọn nộp thuế theo phương pháp kê khai.
+```
+
+### Merge final id=418 fix
+
+```bash
+python scripts/merge_generated_answer_subset.py \
+  --base data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl \
+  --subset data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl \
+  --output data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+```
+
+Observed:
+
+```text
+base_rows: 2000
+subset_rows: 1
+output_rows: 2000
+replaced: 1
+duplicate_subset_ids: []
+```
+
+### Final error analysis after P6.R4 fix id=418
+
+```bash
 python - <<'PY'
 from backend.evaluation.error_analysis import build_error_analysis_report
 
 summary = build_error_analysis_report(
     retrieval_results_path="data/outputs/retrieval_results.jsonl",
-    generated_answers_path="data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl",
-    output_dir="data/outputs/error_analysis_v2_p6r4",
+    generated_answers_path="data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl",
+    output_dir="data/outputs/error_analysis_v2_p6r4_fix_id418",
 )
 print(summary)
 PY
-
-4. Inspect issue counts:
-python - <<'PY'
-import pandas as pd
-from collections import Counter
-from pathlib import Path
-
-low_path = Path("data/outputs/error_analysis_v2_p6r4/low_confidence_questions.csv")
-df = pd.read_csv(low_path)
-
-counter = Counter()
-for value in df["issue_categories"].fillna(""):
-    for part in str(value).replace(";", ",").replace("|", ",").split(","):
-        part = part.strip()
-        if part:
-            counter[part] += 1
-
-print("Issue counts:")
-for k, v in counter.most_common(30):
-    print(k, v)
-
-report_path = Path("data/outputs/error_analysis_v2_p6r4/unsupported_citations_report.csv")
-print("\nunsupported report exists:", report_path.exists())
-if report_path.exists():
-    report = pd.read_csv(report_path)
-    print("unsupported report shape:", report.shape)
-    print(report.head(20).to_string(index=False))
-PY
-
-Acceptance Criteria:
-
-[ ] Chỉ regenerate subset ids lấy từ unsupported_citations_report.csv.
-[ ] Không chạy full 2000 generation.
-[ ] Không overwrite generated_answers_v2_merged.jsonl.
-[ ] Output subset jsonl được ghi riêng.
-[ ] Output merged-for-eval jsonl giữ đủ 2000 rows.
-[ ] Error analysis output ghi vào thư mục mới error_analysis_v2_p6r4.
-[ ] Có thể so sánh unsupported_citation_in_answer trước/sau.
-[ ] Không sửa retrieval.
-[ ] Không sửa selector.
-[ ] Không sửa submission schema.
-[ ] Không dùng Phase 7.
-[ ] Không dùng Neo4j.
-
-Output báo cáo của Codex cần theo format:
-
-P6.R4.V1 — Regenerate subset 76 unsupported citation cases
-
-Files changed:
-- ...
-
-What changed:
-- ...
-
-Scope control:
-- Không sửa retrieval.
-- Không sửa selector.
-- Không sửa submission schema.
-- Không dùng Phase 7.
-- Không dùng Neo4j.
-- Không chạy full 2000.
-
-User-run commands:
-```bash
-
 ```
 
+Observed:
+
+```text
+total_questions: 2000
+low_confidence_count: 454
+unsupported_citation_count: 0
+```
+
+Issue counts after final P6.R4:
+
+```text
+legacy_or_unknown_law_id: 231
+too_many_selected_articles: 216
+answer_maybe_truncated: 52
+answer_insufficient_basis: 6
+unsupported_citation_in_answer: 0
+```
+
+Unsupported citation report:
+
+```text
+unsupported report shape: (0, 6)
+```
+
+---
+
+## Current Phase 6 status after P6.R4
+
+```text
+Phase 6 metrics + error analysis: DONE
+P6.R1 article_text fallback: DONE / VERIFIED
+P6.R2 fair truncation: DONE / VERIFIED
+P6.R3 unsupported citation detection: DONE / VERIFIED
+P6.R3.1 tighten extraction: VERIFIED
+P6.R3.2 law_id edge cases: VERIFIED
+P6.R4 harden QA prompt: VERIFIED
+P6.R4.V1 subset regeneration + merge + error analysis: VERIFIED
+P6.R4.V1b compact prompt/context debug: VERIFIED
+P6.R4.V2a Qwen3 disable thinking: VERIFIED
+P6.R4 final id=418 fix: VERIFIED
+```
+
+### Current best evaluation artifacts after P6.R4
+
+```text
+data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
+data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl
+data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+data/outputs/error_analysis_v2_p6r4/
+data/outputs/error_analysis_v2_p6r4_fix_id418/
+```
+
+### Current best post-P6.R4 answer file
+
+```text
+data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+```
+
+### Current error analysis after P6.R4
+
+```text
+total_questions: 2000
+low_confidence_count: 454
+unsupported_citation_count: 0
+```
+
+### Remaining issue counts
+
+```text
+legacy_or_unknown_law_id: 231
+too_many_selected_articles: 216
+answer_maybe_truncated: 52
+answer_insufficient_basis: 6
+```
+
+### Comparison
+
+```text
+Before P6.R4:
+low_confidence_count: 499
+unsupported_citation_count: 76
+
+After P6.R4:
+low_confidence_count: 454
+unsupported_citation_count: 0
+```
+
+### Next recommended step
+
+```text
+P6.R5 — Analyze too_many_selected_articles / retrieval noise
+```
+
+Do not start Phase 7 until P6.R5 analysis is completed or explicitly deferred.
+
+## P6.R5 — Analyze too_many_selected_articles / retrieval noise
+
+### Status
+
+```text
+PLANNED
+```
+
+### Context
+
+After P6.R4, unsupported citation errors have been eliminated.
+
+Current best post-P6.R4 answer file:
+
+```text
+data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+```
+
+Current error analysis directory:
+
+```text
+data/outputs/error_analysis_v2_p6r4_fix_id418/
+```
+
+Final P6.R4 metrics:
+
+```text
+total_questions: 2000
+low_confidence_count: 454
+unsupported_citation_count: 0
+```
+
+Remaining issue counts:
+
+```text
+legacy_or_unknown_law_id: 231
+too_many_selected_articles: 216
+answer_maybe_truncated: 52
+answer_insufficient_basis: 6
+unsupported_citation_in_answer: 0
+```
+
+The largest actionable remaining answer/retrieval quality issue is:
+
+```text
+too_many_selected_articles: 216
+```
+
+P6.R5 is a diagnostic analysis step. It must not change retrieval, selection, QA generation, or submission logic.
+
+### Goal
+
+Analyze the 216 `too_many_selected_articles` cases and classify whether they are:
+
+```text
+- valid multi-hop / many-article legal questions;
+- same-law many-article cases;
+- cross-law retrieval noise;
+- legacy/version noise;
+- selector over-inclusion;
+- answer truncation risk;
+- insufficient basis risk;
+- cases requiring manual review.
+```
+
+The output of P6.R5 should guide whether the next step should be selector pruning, retrieval filtering, law-version normalization, or Phase 7 reranking.
+
+### Inputs
+
+```text
+data/outputs/error_analysis_v2_p6r4_fix_id418/low_confidence_questions.csv
+data/outputs/error_analysis_v2_p6r4_fix_id418/retrieval_debug_report.csv
+data/outputs/retrieval_results.jsonl
+data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+```
+
+### Planned outputs
+
+```text
+data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_report.csv
+data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_summary.json
+data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_law_distribution.csv
+data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_count_distribution.csv
+data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_samples.md
+```
+
+### Planned files
+
+```text
+backend/evaluation/too_many_selected_analysis.py
+scripts/analyze_too_many_selected_articles.py
+tests/test_too_many_selected_analysis.py
+```
+
+### Required report columns
+
+```text
+id
+question
+selected_count
+unique_law_count
+unique_law_ids
+unique_law_titles_preview
+unique_article_count
+selected_article_ids_preview
+selected_article_nos_preview
+has_legacy_or_unknown_law_id
+has_answer_maybe_truncated
+has_answer_insufficient_basis
+answer_length_chars
+heuristic_category
+heuristic_reason
+recommended_action
+```
+
+### Heuristic categories
+
+```text
+likely_multihop_valid
+same_law_many_articles
+cross_law_possible_noise
+legacy_or_version_noise
+selector_overinclusive
+answer_truncation_risk
+insufficient_basis_risk
+unknown_needs_manual_review
+```
+
+### Scope constraints
+
+P6.R5 must not modify:
+
+```text
+retrieval logic
+selector logic
+QA prompt
+answer generation logic
+submission builder
+baseline answer files
+P6.R4 output files
+```
+
+P6.R5 must not:
+
+```text
+call LLM/vLLM
+run full 2000 answer generation
+implement Phase 7 reranker
+use Neo4j
+change selected_articles
+overwrite existing P6.R4 artifacts
+```
+
+### Validation commands
+
+```bash
+python -m py_compile \
+  backend/evaluation/too_many_selected_analysis.py \
+  scripts/analyze_too_many_selected_articles.py \
+  tests/test_too_many_selected_analysis.py
+```
+
+```bash
+pytest tests/test_too_many_selected_analysis.py -q
+```
+
+```bash
+python scripts/analyze_too_many_selected_articles.py \
+  --low-confidence data/outputs/error_analysis_v2_p6r4_fix_id418/low_confidence_questions.csv \
+  --retrieval-results data/outputs/retrieval_results.jsonl \
+  --generated-answers data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl \
+  --output-dir data/outputs/error_analysis_v2_p6r5_too_many_selected
+```
+
+### Acceptance criteria
+
+```text
+[ ] Report CSV has 216 rows from current P6.R4 fix output.
+[ ] Summary JSON has total_too_many_selected_cases = 216.
+[ ] Category counts sum to 216.
+[ ] Selected-count distribution is generated.
+[ ] Law distribution is generated.
+[ ] Markdown samples are generated by category.
+[ ] No retrieval/selector/submission logic is changed.
+[ ] No LLM/vLLM call is made.
+[ ] No full 2000 answer generation is run.
+[ ] Unit tests pass.
+```
+
+### Expected next decision after P6.R5
+
+Depending on P6.R5 findings:
+
+```text
+- If most cases are valid multi-hop: keep selector threshold and focus on answer truncation.
+- If many cases are same-law over-inclusion: consider selector cap per law_id.
+- If many cases are cross-law noise: consider retrieval score/metadata filtering before Phase 7.
+- If many cases are legacy/version noise: prioritize law_id/version normalization.
+- If many cases cause answer truncation: consider context packing/fair truncation improvements.
+```
+
+Do not start Phase 7 until P6.R5 analysis is completed or explicitly deferred.
 
 ---
 # Phase 7 — Reranker / LLM Verifier
