@@ -532,3 +532,173 @@ def _safe_int(value: Any) -> int:
         except ValueError:
             return 0
     return 0
+
+
+GRID_COMPARISON_CSV = "selector_tuning_comparison.csv"
+GRID_SUMMARY_JSON = "selector_tuning_summary.json"
+GRID_RECOMMENDATION_MD = "selector_tuning_recommendation.md"
+
+GRID_COMPARISON_COLUMNS = [
+    "config_name",
+    "max_selected",
+    "max_unique_law_ids",
+    "min_keep",
+    "metadata_penalty",
+    "same_law_coherence",
+    "too_many_selected_cases_after_tightening",
+    "cases_reduced_selected_count",
+    "cases_reduced_unique_law_count",
+    "possible_recall_loss_cases",
+    "explicit_multilaw_cases",
+    "avg_selected_count_before",
+    "avg_selected_count_after",
+    "avg_unique_law_count_before",
+    "avg_unique_law_count_after",
+    "selected_count_distribution_after",
+    "unique_law_count_distribution_after",
+    "p6r5_too_many_cases_with_original_count_12",
+]
+
+
+def default_tuning_configs() -> dict[str, SelectorTighteningConfig]:
+    return {
+        "baseline_strict": SelectorTighteningConfig(max_selected=8, max_unique_law_ids=5, min_keep=3, metadata_penalty=True, same_law_coherence=True),
+        "balanced_9_6": SelectorTighteningConfig(max_selected=9, max_unique_law_ids=6, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "balanced_10_6": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=6, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "soft_10_7": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=7, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+        "count_only_10": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=99, min_keep=4, metadata_penalty=False, same_law_coherence=False),
+        "law_cap_only_7": SelectorTighteningConfig(max_selected=12, max_unique_law_ids=7, min_keep=4, metadata_penalty=True, same_law_coherence=True),
+    }
+
+
+def run_selector_tightening_grid(
+    retrieval_results_path: str | Path,
+    low_confidence_path: str | Path,
+    p6r5_report_path: str | Path,
+    p6r5b_summary_path: str | Path,
+    candidate_rules_path: str | Path,
+    output_dir: str | Path,
+    configs: Mapping[str, SelectorTighteningConfig] | None = None,
+) -> dict[str, Any]:
+    configs = dict(configs or default_tuning_configs())
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    comparison_rows: list[dict[str, Any]] = []
+    summaries: dict[str, dict[str, Any]] = {}
+
+    for config_name, config in configs.items():
+        config_output_dir = output_path / f"config_{config_name}"
+        summary = run_selector_tightening_experiment(
+            retrieval_results_path=retrieval_results_path,
+            low_confidence_path=low_confidence_path,
+            p6r5_report_path=p6r5_report_path,
+            p6r5b_summary_path=p6r5b_summary_path,
+            candidate_rules_path=candidate_rules_path,
+            output_dir=config_output_dir,
+            config=config,
+        )
+        summaries[config_name] = summary
+        comparison_rows.append(_comparison_row(config_name, summary))
+
+    recommendation = recommend_tuning_config(comparison_rows)
+    grid_summary = {
+        "p6r6b_status": "completed",
+        "implementation_mode": "grid_experiment_only",
+        "config_count": len(configs),
+        "recommended_config": recommendation["recommended_config"],
+        "recommended_next_step": recommendation["recommended_next_step"],
+        "recommended_reason": recommendation["recommended_reason"],
+        "comparison_rows": comparison_rows,
+    }
+    write_csv(output_path / GRID_COMPARISON_CSV, GRID_COMPARISON_COLUMNS, comparison_rows)
+    write_json(output_path / GRID_SUMMARY_JSON, grid_summary)
+    write_tuning_recommendation_markdown(output_path / GRID_RECOMMENDATION_MD, grid_summary)
+    return {
+        **grid_summary,
+        "comparison_path": str(output_path / GRID_COMPARISON_CSV),
+        "summary_path": str(output_path / GRID_SUMMARY_JSON),
+        "recommendation_path": str(output_path / GRID_RECOMMENDATION_MD),
+    }
+
+
+def recommend_tuning_config(comparison_rows: list[Mapping[str, Any]]) -> dict[str, str]:
+    eligible: list[Mapping[str, Any]] = []
+    for row in comparison_rows:
+        too_many_after = _safe_int(row.get("too_many_selected_cases_after_tightening"))
+        recall_loss = _safe_int(row.get("possible_recall_loss_cases"))
+        if too_many_after <= 108 and recall_loss <= 25:
+            eligible.append(row)
+    if eligible:
+        best = sorted(eligible, key=lambda row: (_safe_int(row.get("possible_recall_loss_cases")), _safe_int(row.get("too_many_selected_cases_after_tightening")), -_safe_int(row.get("avg_selected_count_after"))))[0]
+        return {
+            "recommended_config": _safe_text(best.get("config_name")),
+            "recommended_next_step": "P6.R6b_regenerate_answers_on_tightened_subset",
+            "recommended_reason": "config reduces too_many_selected by at least 50% with possible_recall_loss_cases <= 25",
+        }
+    if not comparison_rows:
+        return {"recommended_config": "", "recommended_next_step": "manual_review_required", "recommended_reason": "no configs were evaluated"}
+    lowest_risk = sorted(comparison_rows, key=lambda row: _safe_int(row.get("possible_recall_loss_cases")))[0]
+    if _safe_int(lowest_risk.get("too_many_selected_cases_after_tightening")) >= 162:
+        return {
+            "recommended_config": _safe_text(lowest_risk.get("config_name")),
+            "recommended_next_step": "Phase7_reranker_interface",
+            "recommended_reason": "rule-based configs have little effect at acceptable recall risk",
+        }
+    return {
+        "recommended_config": _safe_text(lowest_risk.get("config_name")),
+        "recommended_next_step": "P6.R6a_tune_selector_tightening_config",
+        "recommended_reason": "no config satisfies both reduction and recall-risk thresholds",
+    }
+
+
+def write_tuning_recommendation_markdown(path: Path, summary: Mapping[str, Any]) -> None:
+    lines = [
+        "# P6.R6b Selector Tightening Tuning Recommendation",
+        "",
+        f"- Recommended config: {summary.get('recommended_config')}",
+        f"- Recommended next step: {summary.get('recommended_next_step')}",
+        f"- Reason: {summary.get('recommended_reason')}",
+        "",
+        "## Comparison",
+        "",
+    ]
+    for row in summary.get("comparison_rows", []):
+        lines.append(
+            f"- {row.get('config_name')}: too_many_after={row.get('too_many_selected_cases_after_tightening')}, "
+            f"recall_loss={row.get('possible_recall_loss_cases')}, avg_selected_after={row.get('avg_selected_count_after')}"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _comparison_row(config_name: str, summary: Mapping[str, Any]) -> dict[str, Any]:
+    config = summary.get("config", {}) if isinstance(summary.get("config"), Mapping) else {}
+    return {
+        "config_name": config_name,
+        "max_selected": config.get("max_selected", ""),
+        "max_unique_law_ids": config.get("max_unique_law_ids", ""),
+        "min_keep": config.get("min_keep", ""),
+        "metadata_penalty": config.get("metadata_penalty", ""),
+        "same_law_coherence": config.get("same_law_coherence", ""),
+        "too_many_selected_cases_after_tightening": summary.get("too_many_selected_cases_after_tightening", 0),
+        "cases_reduced_selected_count": summary.get("cases_reduced_selected_count", 0),
+        "cases_reduced_unique_law_count": summary.get("cases_reduced_unique_law_count", 0),
+        "possible_recall_loss_cases": summary.get("possible_recall_loss_cases", 0),
+        "explicit_multilaw_cases": summary.get("explicit_multilaw_cases", 0),
+        "avg_selected_count_before": _distribution_average(summary.get("baseline_selected_count_distribution")),
+        "avg_selected_count_after": _distribution_average(summary.get("tightened_selected_count_distribution")),
+        "avg_unique_law_count_before": _distribution_average(summary.get("baseline_unique_law_count_distribution")),
+        "avg_unique_law_count_after": _distribution_average(summary.get("tightened_unique_law_count_distribution")),
+        "selected_count_distribution_after": json.dumps(summary.get("tightened_selected_count_distribution", {}), ensure_ascii=False, sort_keys=True),
+        "unique_law_count_distribution_after": json.dumps(summary.get("tightened_unique_law_count_distribution", {}), ensure_ascii=False, sort_keys=True),
+        "p6r5_too_many_cases_with_original_count_12": summary.get("p6r5_too_many_cases_with_original_count_12", 0),
+    }
+
+
+def _distribution_average(distribution: Any) -> float:
+    if not isinstance(distribution, Mapping):
+        return 0.0
+    total_count = sum(_safe_int(value) for value in distribution.values())
+    if total_count <= 0:
+        return 0.0
+    total_value = sum(_safe_int(key) * _safe_int(value) for key, value in distribution.items())
+    return round(total_value / total_count, 3)

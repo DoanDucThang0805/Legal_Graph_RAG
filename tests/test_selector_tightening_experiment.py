@@ -11,7 +11,9 @@ from backend.evaluation.selector_tightening_experiment import (
     is_explicit_multilaw_question,
     metadata_quality_penalty,
     parse_article_id,
+    recommend_tuning_config,
     run_selector_tightening_experiment,
+    run_selector_tightening_grid,
     set_selected_articles,
     tighten_selected_articles,
 )
@@ -169,3 +171,97 @@ def _write_csv(path, columns, rows) -> None:
         writer = csv.DictWriter(file, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
+
+
+
+def test_grid_runner_returns_one_summary_per_config(tmp_path) -> None:
+    retrieval, low, p6r5, p6r5b, rules = _grid_inputs(tmp_path)
+    configs = {
+        "strict": SelectorTighteningConfig(max_selected=5, max_unique_law_ids=5),
+        "soft": SelectorTighteningConfig(max_selected=10, max_unique_law_ids=10),
+    }
+
+    summary = run_selector_tightening_grid(retrieval, low, p6r5, p6r5b, rules, tmp_path / "grid", configs=configs)
+
+    assert summary["config_count"] == 2
+    assert len(summary["comparison_rows"]) == 2
+    assert (tmp_path / "grid" / "config_strict" / "selector_tightening_summary.json").exists()
+    assert (tmp_path / "grid" / "config_soft" / "selector_tightening_summary.json").exists()
+
+
+def test_grid_comparison_csv_has_required_columns(tmp_path) -> None:
+    retrieval, low, p6r5, p6r5b, rules = _grid_inputs(tmp_path)
+    run_selector_tightening_grid(
+        retrieval,
+        low,
+        p6r5,
+        p6r5b,
+        rules,
+        tmp_path / "grid",
+        configs={"strict": SelectorTighteningConfig(max_selected=5, max_unique_law_ids=5)},
+    )
+
+    with (tmp_path / "grid" / "selector_tuning_comparison.csv").open(encoding="utf-8", newline="") as file:
+        header = next(csv.reader(file))
+
+    assert "config_name" in header
+    assert "too_many_selected_cases_after_tightening" in header
+    assert "possible_recall_loss_cases" in header
+    assert "selected_count_distribution_after" in header
+
+
+def test_recommendation_does_not_choose_aggressive_high_recall_loss_config() -> None:
+    rows = [
+        {"config_name": "strict", "too_many_selected_cases_after_tightening": 0, "possible_recall_loss_cases": 69},
+        {"config_name": "soft", "too_many_selected_cases_after_tightening": 180, "possible_recall_loss_cases": 2},
+    ]
+
+    recommendation = recommend_tuning_config(rows)
+
+    assert recommendation["recommended_config"] != "strict"
+    assert recommendation["recommended_next_step"] in {"P6.R6a_tune_selector_tightening_config", "Phase7_reranker_interface"}
+
+
+def test_recommendation_prefers_balanced_config() -> None:
+    rows = [
+        {"config_name": "strict", "too_many_selected_cases_after_tightening": 0, "possible_recall_loss_cases": 69},
+        {"config_name": "balanced", "too_many_selected_cases_after_tightening": 80, "possible_recall_loss_cases": 12},
+    ]
+
+    recommendation = recommend_tuning_config(rows)
+
+    assert recommendation["recommended_config"] == "balanced"
+    assert recommendation["recommended_next_step"] == "P6.R6b_regenerate_answers_on_tightened_subset"
+
+
+def test_grid_output_selected_articles_schema_remains_list_strings(tmp_path) -> None:
+    retrieval, low, p6r5, p6r5b, rules = _grid_inputs(tmp_path)
+    run_selector_tightening_grid(
+        retrieval,
+        low,
+        p6r5,
+        p6r5b,
+        rules,
+        tmp_path / "grid",
+        configs={"strict": SelectorTighteningConfig(max_selected=5, max_unique_law_ids=5)},
+    )
+
+    rows = _read_jsonl(tmp_path / "grid" / "config_strict" / "retrieval_results_p6r6_tightened.jsonl")
+
+    assert rows
+    assert isinstance(rows[0]["selected_articles"], list)
+    assert isinstance(rows[0]["selected_articles"][0], str)
+
+
+def _grid_inputs(tmp_path):
+    retrieval = tmp_path / "retrieval.jsonl"
+    low = tmp_path / "low.csv"
+    p6r5 = tmp_path / "p6r5.csv"
+    p6r5b = tmp_path / "p6r5b.json"
+    rules = tmp_path / "rules.json"
+    _write_jsonl(retrieval, [{"id": 1, "question": "ordinary question", "selected_articles": [_article_id(i, f"LAW{i}") for i in range(12)]}])
+    _write_csv(low, ["id", "issue_categories"], [{"id": "1", "issue_categories": "too_many_selected_articles"}])
+    _write_csv(p6r5, ["id"], [{"id": "1"}])
+    p6r5b.write_text("{}", encoding="utf-8")
+    rules.write_text("[]", encoding="utf-8")
+    return retrieval, low, p6r5, p6r5b, rules
