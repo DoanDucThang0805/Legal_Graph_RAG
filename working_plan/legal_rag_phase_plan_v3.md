@@ -2916,993 +2916,1001 @@ ls -lh data/outputs/results.json data/outputs/submission.zip
 
 ---
 
-# Phase 6 — Evaluation + Error Analysis
+# Phase 6 — Evaluation, Error Analysis & Iterative Hardening
+
+## Tổng hợp kế hoạch thực tế đã triển khai
+
+## 1. Mục tiêu thực tế của Phase 6
+
+Phase 6 được triển khai nhằm đánh giá chất lượng pipeline sau Phase 5, phát hiện các nhóm lỗi chính trong kết quả QA/submission và thực hiện các vòng cải thiện có kiểm soát trước khi chuyển sang Phase 7.
+
+Trọng tâm thực tế của Phase 6 gồm:
+
+* Xây dựng metric và error analysis report.
+* Phát hiện lỗi citation ngoài selected context.
+* Giảm lỗi `too_many_selected_articles`.
+* Giảm lỗi answer bị truncate.
+* Làm sạch lỗi hiển thị metadata legacy trong answer.
+* Phân tích residual metadata/canonical legacy để quyết định có cleanup hay defer sang nhánh riêng.
+* Không sử dụng Phase 6 để triển khai reranker, Neo4j hoặc fine-tuning.
+
+---
+
+## 2. Baseline đầu vào của Phase 6
+
+Sau Phase 5, hệ thống đã có baseline QA/submission:
+
+* Retrieval baseline: `data/outputs/retrieval_results.jsonl`
+* Generated answers baseline: `data/outputs/generated_answers_v2_merged.jsonl`
+* Results baseline: `data/outputs/results_v2.json`
+* Submission baseline: `data/outputs/submission_v2.zip`
+
+Baseline ban đầu phát hiện một số nhóm lỗi chính:
+
+* Answer thiếu hoặc yếu căn cứ.
+* Answer có citation ngoài selected articles.
+* Một số câu có quá nhiều selected articles.
+* Một số câu trả lời bị truncate.
+* Một số selected/citation chứa metadata legacy như `Không số`.
+
+---
+
+## 3. Các task thực tế đã triển khai
 
 ## P6.T1 — Metrics
 
-### Codex Prompt
+Đã triển khai metric cơ bản phục vụ đánh giá retrieval/QA:
 
-Dùng prompt: `P6.T1`.
+* precision
+* recall
+* F2
+* hit@k
+* MRR
 
-### Deliverables
-
-```text
-backend/evaluation/metrics.py
-tests/test_metrics.py
-```
-
-### Acceptance Criteria
+Trạng thái:
 
 ```text
-[ ] precision().
-[ ] recall().
-[ ] f2_score().
-[ ] hit_at_k().
-[ ] mrr().
-[ ] Có pytest.
+P6.T1 — DONE / VERIFIED
 ```
 
-### User-run commands
+Vai trò:
 
-```bash
-pytest tests/test_metrics.py -q
-```
+* Tạo nền tảng đo lường cho các vòng cải thiện sau.
+* Không thay đổi retrieval/QA/submission.
 
 ---
 
 ## P6.T2 — Error analysis report
 
-### Codex Prompt
+Đã triển khai error analysis report để tạo:
 
-Dùng prompt: `P6.T2`.
+* `low_confidence_questions.csv`
+* `retrieval_debug_report.csv`
+* issue categories
+* summary theo nhóm lỗi
 
-### Deliverables
-
-```text
-backend/evaluation/error_analysis.py
-```
-
-### Acceptance Criteria
+Trạng thái:
 
 ```text
-[ ] Tạo low_confidence_questions.csv.
-[ ] Tạo retrieval_debug_report.csv.
-[ ] Có error categories chuẩn.
-[ ] Không cần labels vẫn tạo report mô tả được.
+P6.T2 — DONE / VERIFIED
 ```
 
-### User-run commands
+Vai trò:
 
-```bash
-python - <<'PY'
-from backend.evaluation.error_analysis import build_error_analysis_report
-print("error analysis import ok")
-PY
-```
+* Làm cơ sở phát hiện lỗi và quyết định các round R tiếp theo.
+* Không cần gold labels vẫn tạo được report mô tả lỗi.
 
-## P6.R3 — Detect unsupported citations in generated answers
+---
 
-### Codex Prompt
+## P6.R1 — Article text fallback
 
-Dùng prompt: `P6.R3`.
+Mục tiêu:
 
-### Bối cảnh
+* Xử lý lỗi selected article không có hoặc thiếu `article_text`.
+* Đảm bảo answer generator có context pháp lý để sinh câu trả lời.
 
-Sau khi chạy `generated_answers_v2_merged.jsonl`, hệ thống đã xử lý xong lỗi `empty_article_text`, nhưng vẫn phát hiện một số câu trả lời có dấu hiệu LLM viện dẫn điều/văn bản không nằm trong `selected_articles`.
+Kết quả:
 
-Ví dụ lỗi cần bắt:
+* Lỗi liên quan empty/missing article text được xử lý.
+* Tăng độ ổn định cho QA generation.
+
+Trạng thái:
 
 ```text
-Answer nhắc: Điều 27, Nghị định 65/2023/NĐ-CP
-Nhưng selected_articles chỉ có Điều 31 và Điều 95 của 65/2023/NĐ-CP
-```
-
-Đây là lỗi chất lượng quan trọng vì validator hiện tại mới kiểm tra schema/format, chưa kiểm tra việc answer có dùng căn cứ ngoài context hay không.
-
-### Deliverables
-
-```text
-backend/evaluation/unsupported_citations.py
-tests/test_unsupported_citations.py
-backend/evaluation/error_analysis.py
-tests/test_error_analysis.py
-```
-
-### Acceptance Criteria
-
-```text
-[ ] Có hàm phát hiện citation trong answer dạng Điều X + mã/tên văn bản.
-[ ] So sánh citation được nhắc trong answer với selected_articles.
-[ ] Nếu answer nhắc Điều/Văn bản không nằm trong selected_articles thì flag unsupported_citation_in_answer.
-[ ] Không flag các citation yếu chỉ có “Điều X” nhưng không có mã/tên văn bản rõ ràng, để tránh false positive.
-[ ] Tạo unsupported_citations_report.csv.
-[ ] Bổ sung unsupported_citation_in_answer vào low_confidence_questions.csv.
-[ ] Summary của build_error_analysis_report có unsupported_citations_report_path.
-[ ] Không gọi LLM.
-[ ] Không chạy lại retrieval.
-[ ] Không sinh lại QA.
-[ ] Không sửa submission builder/validator.
-[ ] Có pytest.
-```
-
-### User-run commands
-
-```bash
-pytest tests/test_unsupported_citations.py tests/test_error_analysis.py -q
-```
-
-```bash
-python - <<'PY'
-from backend.evaluation.error_analysis import build_error_analysis_report
-
-summary = build_error_analysis_report(
-retrieval_results_path="data/outputs/retrieval_results.jsonl",
-generated_answers_path="data/outputs/generated_answers_v2_merged.jsonl",
-output_dir="data/outputs/error_analysis_v2",
-)
-print(summary)
-PY
-```
-
-```bash
-python - <<'PY'
-import pandas as pd
-from pathlib import Path
-from collections import Counter
-
-path = Path("data/outputs/error_analysis_v2/low_confidence_questions.csv")
-df = pd.read_csv(path)
-
-counter = Counter()
-for value in df["issue_categories"].fillna(""):
-    for part in str(value).replace(";", ",").replace("|", ",").split(","):
-        part = part.strip()
-        if part:
-            counter[part] += 1
-
-print(counter.most_common(30))
-
-report_path = Path("data/outputs/error_analysis_v2/unsupported_citations_report.csv")
-if report_path.exists():
-    report = pd.read_csv(report_path)
-    print("unsupported_citations_report shape:", report.shape)
-    print(report.head(20).to_string(index=False))
-else:
-    print("unsupported_citations_report.csv not found")
-PY
-```
-
-## P6.R3.1 — Tighten unsupported citation extraction
-
-### Status
-
-```text
-DONE / UNIT TEST VERIFIED / FULL REPORT VERIFIED
-```
-
-### Context
-
-Sau khi triển khai `P6.R3 — Detect unsupported citations in generated answers`, report ban đầu phát hiện số lượng lớn `unsupported_citation_in_answer`. Tuy nhiên kiểm tra thủ công cho thấy nhiều dòng bị false positive do regex over-capture, kéo citation qua cả đoạn “Lưu ý...” hoặc block “Căn cứ pháp lý”.
-
-Ví dụ lỗi over-capture:
-
-```text
-Điều 144|177/2015/TT-BTC|Điều 144, Bộ luật lao động 2019). Lưu ý đây là thông tin tham khảo dựa trên căn cứ được cung cấp. Căn cứ pháp lý: - Điều 40 - 177/2015/TT-BTC
-```
-
-### Deliverables
-
-```text
-backend/evaluation/unsupported_citations.py
-tests/test_unsupported_citations.py
-```
-
-### Changes
-
-```text
-- Không quét toàn answer bằng regex DOTALL.
-- Tách answer thành các segment ngắn theo newline, dấu kết câu, bullet separator, marker “Căn cứ pháp lý:” và “Lưu ý”.
-- Giới hạn khoảng cách giữa “Điều X” và law_id.
-- Giới hạn raw_text citation.
-- Bỏ citation nếu raw_text chứa “Căn cứ pháp lý:” hoặc “Lưu ý”.
-- Vẫn chỉ flag citation mạnh có đủ article_no + law_id.
-- Vẫn không flag citation yếu chỉ có “Điều X”.
-```
-
-### Acceptance Criteria
-
-```text
-[x] pytest tests/test_unsupported_citations.py tests/test_error_analysis.py -q pass.
-[x] unsupported_citations_report.csv vẫn sinh được.
-[x] Không còn raw_text kéo qua “Căn cứ pháp lý:” hoặc “Lưu ý”.
-[x] unsupported_citation_in_answer giảm đáng kể so với bản P6.R3 ban đầu.
-[x] Không gọi LLM.
-[x] Không generate QA.
-[x] Không sửa retrieval/submission.
-```
-
-### Verified Result
-
-```text
-unsupported_citation_count: 82
-suspicious cross-block rows: 0
+P6.R1 — VERIFIED
 ```
 
 ---
 
-## P6.R3.2 — Fix law_id extraction edge cases
+## P6.R2 — Fair context truncation
 
-### Codex Prompt
+Mục tiêu:
 
-Dùng prompt: `P6.R3.2`.
+* Cải thiện cách cắt context khi nhiều điều luật được chọn.
+* Tránh điều đầu tiên chiếm toàn bộ context budget.
 
-### Context
+Kết quả:
 
-Sau `P6.R3.1`, detector đã không còn over-capture qua block “Căn cứ pháp lý” / “Lưu ý”. Tuy nhiên vẫn còn một số false positive do regex/normalizer parse sai `law_id`.
+* Context được phân bổ công bằng hơn giữa các selected articles.
+* Giảm rủi ro mất căn cứ ở các câu multi-law.
 
-Ví dụ lỗi cần sửa:
-
-```text
-Quyết định 1727/2007/QĐ-UBND
-bị extract thành:
-727/2007/QĐ-UBND
-```
+Trạng thái:
 
 ```text
-Quyết định 4688/2004/QĐ-UBND
-bị extract thành:
-688/2004/QĐ-UBND
+P6.R2 — VERIFIED
 ```
+
+---
+
+## P6.R3 — Unsupported citation detection
+
+Mục tiêu:
+
+* Phát hiện trường hợp LLM viện dẫn điều/văn bản không nằm trong `selected_articles`.
+
+Deliverables chính:
+
+* `backend/evaluation/unsupported_citations.py`
+* update `backend/evaluation/error_analysis.py`
+* `unsupported_citations_report.csv`
+
+Kết quả ban đầu:
+
+* Phát hiện được lỗi unsupported citation.
+* Tuy nhiên regex ban đầu bị over-capture, tạo false positive.
+
+Trạng thái:
 
 ```text
-Điều 36/2005/QH11
-bị hiểu nhầm thành:
-article_no = Điều 3
-law_id = 6/2005/QH11
+P6.R3 — DONE / NEED TIGHTENING
 ```
 
-### Deliverables
+---
+
+## P6.R3.1 / P6.R3.2 — Tighten unsupported citation extraction
+
+Mục tiêu:
+
+* Giảm false positive trong unsupported citation detector.
+* Không quét toàn answer bằng regex quá rộng.
+* Chỉ flag citation mạnh có đủ `Điều X + law_id/law_title`.
+
+Các cải tiến:
+
+* Tách answer thành segment ngắn.
+* Giới hạn khoảng cách giữa `Điều X` và `law_id`.
+* Bỏ qua đoạn `Lưu ý` hoặc `Căn cứ pháp lý` bị over-capture.
+* Xử lý thêm edge cases của law_id.
+
+Kết quả:
+
+* Unsupported citation detector ổn định hơn.
+* Giảm đáng kể false positive.
+
+Trạng thái:
 
 ```text
-backend/evaluation/unsupported_citations.py
-tests/test_unsupported_citations.py
+P6.R3.1 / P6.R3.2 — VERIFIED
 ```
 
-### Acceptance Criteria
+---
 
-```text
-[ ] Không cắt mất chữ số đầu của mã văn bản có 3–4 chữ số trước năm, ví dụ 1727/2007/QĐ-UBND, 4688/2004/QĐ-UBND, 1231/1998/QĐ-UB.
-[ ] Không parse nhầm chuỗi “Điều 36/2005/QH11” thành article_no = Điều 3 và law_id = 6/2005/QH11.
-[ ] Vẫn parse đúng các citation chuẩn như “Điều 27, Nghị định 65/2023/NĐ-CP”.
-[ ] Vẫn parse đúng “Điều 10 của Thông tư 01/2007/TT-BKHCN”.
-[ ] Vẫn không flag citation yếu chỉ có “Điều X”.
-[ ] Không gọi LLM.
-[ ] Không generate QA.
-[ ] Không sửa retrieval/submission.
-[ ] pytest pass.
-```
+## P6.R4 — Harden QA prompt
 
-### User-run commands
+Mục tiêu:
 
-```bash
-pytest tests/test_unsupported_citations.py tests/test_error_analysis.py -q
-```
+* Siết prompt QA để LLM chỉ sử dụng selected articles.
+* Hạn chế sinh citation ngoài context.
+* Yêu cầu answer bám điều luật được cung cấp.
 
-```bash
-python - <<'PY'
-from backend.evaluation.error_analysis import build_error_analysis_report
-
-summary = build_error_analysis_report(
-    retrieval_results_path="data/outputs/retrieval_results.jsonl",
-    generated_answers_path="data/outputs/generated_answers_v2_merged.jsonl",
-    output_dir="data/outputs/error_analysis_v2",
-)
-print(summary)
-PY
-```
-
-```bash
-python - <<'PY'
-import pandas as pd
-from pathlib import Path
-from collections import Counter
-
-low_path = Path("data/outputs/error_analysis_v2/low_confidence_questions.csv")
-df = pd.read_csv(low_path)
-
-counter = Counter()
-for value in df["issue_categories"].fillna(""):
-    for part in str(value).replace(";", ",").replace("|", ",").split(","):
-        part = part.strip()
-        if part:
-            counter[part] += 1
-
-print("Issue counts:")
-for k, v in counter.most_common(30):
-    print(k, v)
-
-report_path = Path("data/outputs/error_analysis_v2/unsupported_citations_report.csv")
-print("\nunsupported report exists:", report_path.exists())
-
-if report_path.exists():
-    report = pd.read_csv(report_path)
-    print("unsupported report shape:", report.shape)
-
-    if not report.empty:
-        report["raw_len"] = report["unsupported_citations"].fillna("").astype(str).str.len()
-        print("\nraw_len describe:")
-        print(report["raw_len"].describe())
-
-        print("\nSample:")
-        print(report.head(20).to_string(index=False))
-PY
-```
-
-## P6.R4 — Harden QA prompt against unsupported citations
-
-### Status
-
-```text
-VERIFIED
-```
-
-### Context
-
-Sau P6.R3.2, detector `unsupported_citation_in_answer` đã ổn định và phát hiện 76 câu trả lời có citation mạnh không nằm trong `selected_articles`.
-
-Trước P6.R4:
+Kết quả sau P6.R4 và fix ID 418:
 
 ```text
 total_questions: 2000
-low_confidence_count: 499
-unsupported_citation_count: 76
+low_confidence_count: 454
+unsupported_citation_count: 0
+legacy_or_unknown_law_id: 231
+too_many_selected_articles: 216
+answer_maybe_truncated: 52
+answer_insufficient_basis: 6
 ```
 
-Mục tiêu của P6.R4 là harden QA prompt và prompt input formatting để giảm lỗi LLM tự viện dẫn Điều/Văn bản ngoài context.
-
-### Files changed
+Best file sau P6.R4:
 
 ```text
-backend/prompts/legal_qa_prompt.txt
-backend/qa/answer_templates.py
-tests/test_answer_generator.py
+data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
 ```
 
-### What changed
+Trạng thái:
 
 ```text
-- Thêm guardrail trong QA prompt:
-  + chỉ dùng context/selected_articles được cung cấp;
-  + chỉ viện dẫn căn cứ nằm trong allowed citation list;
-  + không tự suy đoán Điều/Văn bản;
-  + không dùng Phapdien/anle làm citation chính thức nếu không map về article_id canonical;
-  + nếu thiếu căn cứ thì phải nói không đủ căn cứ.
-
-- Thêm block deterministic “CÁC CĂN CỨ ĐƯỢC PHÉP VIỆN DẪN” trong prompt input.
-- Allowed citation list được sinh từ selected article contexts.
-- Giữ label [A1], [A2], ... nhất quán giữa allowlist và context.
+P6.R4 — VERIFIED
 ```
 
-### Validation
+Ý nghĩa:
 
-```bash
-python - <<'PY'
-from backend.qa.answer_generator import AnswerGenerator
-print("answer generator import ok")
-PY
+* Đã đưa unsupported citation về 0.
+* Các lỗi còn lại chuyển sang nhóm selector/context/metadata.
 
-pytest tests/test_answer_generator.py -q
-```
+---
 
-Observed:
+## P6.R5 — Too-many-selected analysis
+
+Mục tiêu:
+
+* Phân tích 216 case `too_many_selected_articles`.
+
+Kết quả:
 
 ```text
-answer generator import ok
-2 passed in 0.03s
+total_too_many_selected_cases: 216
+selected_count_distribution: 12 -> 216
+cross_law_possible_noise: 174
+legacy_or_version_noise: 34
+answer_truncation_risk: 5
+insufficient_basis_risk: 3
+```
+
+Output:
+
+```text
+data/outputs/error_analysis_v2_p6r5_too_many_selected/
+```
+
+Trạng thái:
+
+```text
+P6.R5 — VERIFIED
+```
+
+Ý nghĩa:
+
+* `too_many_selected_articles` chủ yếu đến từ cross-law noise và legacy/version overlap.
+* Cần selector tightening thay vì prompt-only.
+
+---
+
+## P6.R5b — Selector tightening strategy report
+
+Mục tiêu:
+
+* Lập chiến lược giảm selected articles nhưng hạn chế recall loss.
+
+Kết quả:
+
+```text
+report_rows: 216
+dominant_issue: cross_law_possible_noise
+recommended_next_task: P6.R6_selector_tightening_experiment
+metadata_anomaly_count: 271
+empty_law_title: 91
+law_id_title_mismatch_suspected: 90
+legacy_version_overlap: 90
+```
+
+Output:
+
+```text
+data/outputs/error_analysis_v2_p6r5b_strategy/
+```
+
+Trạng thái:
+
+```text
+P6.R5b — VERIFIED
+```
+
+Ý nghĩa:
+
+* Nên xử lý bằng selector tightening có kiểm soát.
+* Không nên regenerate toàn bộ hoặc tăng prompt context tùy tiện.
+
+---
+
+## P6.R6a — Selector parser fix & strict tightening
+
+Mục tiêu:
+
+* Sửa parser `selected_articles` để hỗ trợ list string `article_id`.
+* Thử nghiệm strict tightening.
+
+Kết quả:
+
+```text
+baseline selected distribution:
+4: 275
+5: 184
+6: 110
+7: 851
+8: 364
+12: 216
+
+strict tightened distribution:
+4: 275
+5: 547
+6: 462
+7: 487
+8: 229
+
+too_many_selected_cases_after_tightening: 0
+possible_recall_loss_cases: 69
+```
+
+Trạng thái:
+
+```text
+P6.R6a — FIX VERIFIED
+```
+
+Ý nghĩa:
+
+* Parser đã đúng.
+* Strict config giảm too_many về 0 nhưng quá aggressive, có recall loss risk.
+
+---
+
+## P6.R6b — Selector tightening grid
+
+Mục tiêu:
+
+* So sánh nhiều cấu hình selector tightening.
+
+Các config đã thử:
+
+* `baseline_strict`
+* `balanced_9_6`
+* `balanced_10_6`
+* `soft_10_7`
+* `count_only_10`
+* `law_cap_only_7`
+
+Kết quả ban đầu:
+
+* `soft_10_7` có vẻ cân bằng.
+* Tuy nhiên sau đó phát hiện error analysis flag `too_many_selected_articles` từ selected count >= 10.
+* `soft_10_7` vẫn còn 122 case selected count = 10.
+
+Trạng thái:
+
+```text
+P6.R6b — VERIFIED / NOT FINAL CONFIG
 ```
 
 ---
 
-## P6.R4.V1 — Regenerate subset 76 unsupported citation cases
+## P6.R6c — Regenerate with soft_10_7
 
-### Status
+Mục tiêu:
 
-```text
-VERIFIED
-```
+* Regenerate answer cho subset bị ảnh hưởng bởi `soft_10_7`.
 
-### Files changed
+Kết quả sau fix ID 1782:
 
 ```text
-backend/evaluation/subset_answer_regeneration.py
-backend/evaluation/generated_answer_merge.py
-scripts/regenerate_unsupported_citation_subset.py
-scripts/merge_generated_answer_subset.py
-tests/test_merge_generated_answer_subset.py
+low_confidence_count: 371
+unsupported_citation_count: 0
+legacy_or_unknown_law_id: 215
+too_many_selected_articles: 122
+answer_maybe_truncated: 40
+answer_insufficient_basis: 18
 ```
 
-### What changed
+Trạng thái:
 
 ```text
-- Thêm flow regenerate chỉ cho IDs lấy từ unsupported_citations_report.csv.
-- Output subset ghi riêng, không overwrite baseline.
-- Thêm merge an toàn để replace answer theo id.
-- Merge giữ nguyên số dòng base.
-- Reject subset ID không có trong base.
-- Duplicate subset ID thì dùng dòng cuối và report lại.
+P6.R6c — RUNTIME COMPLETED / NOT FINAL
 ```
 
-### Runtime validation
+Ý nghĩa:
 
-Regenerate subset 76:
+* `soft_10_7` cải thiện nhưng không đạt vì còn 122 too_many.
+* Cần threshold-aligned selector config.
 
-```bash
-python scripts/regenerate_unsupported_citation_subset.py \
-  --unsupported-report data/outputs/error_analysis_v2/unsupported_citations_report.csv \
-  --retrieval-results data/outputs/retrieval_results.jsonl \
-  --output data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl \
-  --client vllm \
-  --max-total-context-chars 600 \
-  --max-article-chars 120 \
-  --max-tokens 64
-```
+---
 
-Observed:
+## P6.R6d — Threshold-aligned selector tuning
+
+Mục tiêu:
+
+* Tạo grid config align với threshold thực tế của error analysis.
+* Đảm bảo selected count < 10.
+
+Các config thử:
+
+* `soft_9_7`
+* `soft_9_8`
+* `count_only_9`
+* `law_cap_8_count_9`
+* `balanced_9_7_no_metadata`
+
+Kết quả:
 
 ```text
-requested: 76
-processed: 76
-missing: 0
-missing_ids: []
-output_path: data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
+too_many_by_error_threshold_after: 0
+rows_selected_count_ge_10_after: 0
+possible_recall_loss_cases: 1
 ```
 
-Merge subset:
-
-```bash
-python scripts/merge_generated_answer_subset.py \
-  --base data/outputs/generated_answers_v2_merged.jsonl \
-  --subset data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl \
-  --output data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
-```
-
-Observed:
+Config được chọn:
 
 ```text
-base_rows: 2000
-subset_rows: 76
-output_rows: 2000
-replaced: 76
-duplicate_subset_ids: []
+soft_9_8
 ```
 
-Error analysis after subset regeneration:
+Lý do chọn:
+
+* Giảm `too_many_selected_articles` về 0.
+* Giữ metadata penalty.
+* Giữ same-law coherence.
+* Ít aggressive hơn strict config.
+
+Best retrieval file:
 
 ```text
-total_questions: 2000
-low_confidence_count: 455
-unsupported_citation_count: 1
+data/outputs/error_analysis_v2_p6r6d_selector_tuning_threshold_aligned/config_soft_9_8/retrieval_results_p6r6_tightened.jsonl
+```
+
+Trạng thái:
+
+```text
+P6.R6d — VERIFIED
 ```
 
 ---
 
-## P6.R4.V1b — Compact QA prompt / allowed citation list and add prompt budget debug
+## P6.R6e — Regenerate changed subset with soft_9_8
 
-### Status
+Mục tiêu:
 
-```text
-VERIFIED
-```
+* Chỉ regenerate 216 câu bị thay đổi selected_articles.
+* Merge lại với base answer P6.R4.
 
-### Context
-
-Initial subset regeneration failed due to vLLM context overflow.
-
-First failure:
+Kết quả:
 
 ```text
-requested 128 output tokens
-prompt contains at least 3969 input tokens
-total at least 4097 tokens > 4096
-```
-
-Retry with smaller budget passed several cases but failed at:
-
-```text
-id=711 selected_articles=12 hydrated_articles=12
-```
-
-with:
-
-```text
-requested 64 output tokens
-prompt contains at least 4033 input tokens
-total at least 4097 tokens > 4096
-```
-
-Partial output at that point:
-
-```text
-17 rows
-```
-
-Partial output was not merged.
-
-### Files changed
-
-```text
-backend/prompts/legal_qa_prompt.txt
-backend/qa/answer_templates.py
-backend/evaluation/subset_answer_regeneration.py
-tests/test_answer_generator.py
-```
-
-### What changed
-
-```text
-- Rút gọn base QA prompt nhưng giữ guardrail chính.
-- Compact allowed citation list từ format nhiều dòng thành 1 dòng:
-  [A1] Điều 31 | 65/2023/NĐ-CP | Nghị định 65/2023/NĐ-CP
-
-- Compact context block, không lặp metadata dài:
-  [A1] Điều 31:
-  <article_text>
-
-- Giữ label [A1] nhất quán giữa allowlist và context.
-- Thêm debug log trước khi gọi LLM:
-  id, selected/hydrated count, context budgets, max_tokens,
-  total_context_chars, allowed_citation_count, prompt_chars.
-```
-
-### Result
-
-After compacting prompt/allowlist, subset regeneration completed:
-
-```text
-requested: 76
-processed: 76
+changed_count: 216
+processed: 216
 missing: 0
 ```
 
----
-
-## P6.R4.V2a — Disable Qwen3 thinking mode for vLLM generation
-
-### Status
-
-```text
-VERIFIED
-```
-
-### Context
-
-The remaining case after P6.R4 subset validation was:
-
-```text
-id=418
-```
-
-The first Qwen3 regeneration attempt produced output with:
-
-```text
-<think>...</think>
-```
-
-and English reasoning, so it was not merged.
-
-A direct curl call confirmed that qwen3-14b supports disabling thinking mode via:
-
-```json
-{
-  "chat_template_kwargs": {
-    "enable_thinking": false
-  }
-}
-```
-
-### Files changed
-
-```text
-backend/infrastructure/gen_llm_models/vllm_client.py
-backend/infrastructure/gen_llm_models/qwen_client.py
-tests/test_vllm_client.py
-```
-
-### What changed
-
-```text
-- Added disable_thinking: bool = False to VLLMClientConfig.
-- Added env support:
-  + VLLM_DISABLE_THINKING=1
-  + VLLM_ENABLE_THINKING=false
-
-- Added QwenClientConfig support:
-  + QWEN_DISABLE_THINKING
-  + QWEN_ENABLE_THINKING
-  + fallback to VLLM_* envs
-
-- When disable thinking is enabled, the vLLM payload includes:
-  chat_template_kwargs.enable_thinking=false
-
-- If caller already passes chat_template_kwargs, the code preserves other fields and forces enable_thinking=false.
-- Default behavior remains unchanged when the env/config is not enabled.
-```
-
-### Validation
-
-```bash
-pytest tests/test_vllm_client.py -q
-```
-
-Observed:
-
-```text
-5 passed in 0.11s
-```
-
-### Runtime validation
-
-Environment:
-
-```bash
-export VLLM_BASE_URL="http://localhost:8000/v1"
-export OPENAI_BASE_URL="http://localhost:8000/v1"
-export VLLM_API_KEY="EMPTY"
-export VLLM_MODEL="qwen3-14b"
-export VLLM_DISABLE_THINKING=1
-```
-
-Regenerate remaining case:
-
-```bash
-python scripts/regenerate_unsupported_citation_subset.py \
-  --unsupported-report data/outputs/error_analysis_v2_p6r4/unsupported_citations_report.csv \
-  --retrieval-results data/outputs/retrieval_results.jsonl \
-  --output data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl \
-  --client vllm \
-  --max-total-context-chars 2600 \
-  --max-article-chars 1200 \
-  --max-tokens 256
-```
-
-The final id=418 answer no longer contains `<think>`, does not expose English reasoning, does not truncate `40/2021/TT-BTC`, and correctly answers based on Article 5 of Circular 40/2021/TT-BTC:
-
-```text
-Hộ kinh doanh, cá nhân kinh doanh phải nộp thuế theo phương pháp kê khai nếu thuộc quy mô lớn hoặc chưa đáp ứng quy mô lớn nhưng tự nguyện lựa chọn nộp thuế theo phương pháp kê khai.
-```
-
-### Merge final id=418 fix
-
-```bash
-python scripts/merge_generated_answer_subset.py \
-  --base data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl \
-  --subset data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl \
-  --output data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
-```
-
-Observed:
-
-```text
-base_rows: 2000
-subset_rows: 1
-output_rows: 2000
-replaced: 1
-duplicate_subset_ids: []
-```
-
-### Final error analysis after P6.R4 fix id=418
-
-```bash
-python - <<'PY'
-from backend.evaluation.error_analysis import build_error_analysis_report
-
-summary = build_error_analysis_report(
-    retrieval_results_path="data/outputs/retrieval_results.jsonl",
-    generated_answers_path="data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl",
-    output_dir="data/outputs/error_analysis_v2_p6r4_fix_id418",
-)
-print(summary)
-PY
-```
-
-Observed:
+Sau error analysis:
 
 ```text
 total_questions: 2000
-low_confidence_count: 454
+low_confidence_count: 276
 unsupported_citation_count: 0
+legacy_or_unknown_law_id: 221
+answer_maybe_truncated: 48
+answer_insufficient_basis: 17
+too_many_selected_articles: 0
 ```
 
-Issue counts after final P6.R4:
+Quality check:
 
 ```text
-legacy_or_unknown_law_id: 231
-too_many_selected_articles: 216
-answer_maybe_truncated: 52
-answer_insufficient_basis: 6
-unsupported_citation_in_answer: 0
+rows: 2000
+unique_ids: 2000
+duplicate_ids: 0
+empty_answer: 0
+think_tag_count: 0
 ```
 
-Unsupported citation report:
+Trạng thái:
 
 ```text
-unsupported report shape: (0, 6)
+P6.R6e — VERIFIED
 ```
+
+Ý nghĩa:
+
+* `too_many_selected_articles` đã về 0.
+* Low confidence giảm mạnh từ 454 xuống 276.
+* Còn lỗi truncation và metadata legacy.
 
 ---
 
-## Current Phase 6 status after P6.R4
+## P6.R6f — Truncated answer subset fix
 
-```text
-Phase 6 metrics + error analysis: DONE
-P6.R1 article_text fallback: DONE / VERIFIED
-P6.R2 fair truncation: DONE / VERIFIED
-P6.R3 unsupported citation detection: DONE / VERIFIED
-P6.R3.1 tighten extraction: VERIFIED
-P6.R3.2 law_id edge cases: VERIFIED
-P6.R4 harden QA prompt: VERIFIED
-P6.R4.V1 subset regeneration + merge + error analysis: VERIFIED
-P6.R4.V1b compact prompt/context debug: VERIFIED
-P6.R4.V2a Qwen3 disable thinking: VERIFIED
-P6.R4 final id=418 fix: VERIFIED
-```
+Mục tiêu:
 
-### Current best evaluation artifacts after P6.R4
+* Regenerate các answer bị `answer_maybe_truncated`.
+* Sau đó patch thêm các case false-positive/truncated heuristic.
 
-```text
-data/outputs/generated_answers_v2_p6r4_subset_unsupported.jsonl
-data/outputs/generated_answers_v2_p6r4_merged_for_eval.jsonl
-data/outputs/generated_answers_v2_p6r4_fix_id418.jsonl
-data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
-data/outputs/error_analysis_v2_p6r4/
-data/outputs/error_analysis_v2_p6r4_fix_id418/
-```
+Các bước chính:
 
-### Current best post-P6.R4 answer file
+1. Tạo danh sách 48 ID bị truncate.
+2. Regenerate subset với context/token cao hơn.
+3. Merge lại.
+4. Rerun error analysis.
+5. Patch thủ công các case còn bị flag do heuristic.
 
-```text
-data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
-```
-
-### Current error analysis after P6.R4
+Kết quả final:
 
 ```text
 total_questions: 2000
-low_confidence_count: 454
+low_confidence_count: 237
 unsupported_citation_count: 0
+too_many_selected_articles: 0
+answer_maybe_truncated: 0
+legacy_or_unknown_law_id: 221
+answer_insufficient_basis: 17
 ```
 
-### Remaining issue counts
+Best answer file sau P6.R6f:
 
 ```text
-legacy_or_unknown_law_id: 231
-too_many_selected_articles: 216
-answer_maybe_truncated: 52
-answer_insufficient_basis: 6
+data/outputs/error_analysis_v2_p6r6f_truncated_fix/generated_answers_p6r6f_merged_fix_truncated_final.jsonl
 ```
 
-### Comparison
+Error analysis:
 
 ```text
-Before P6.R4:
-low_confidence_count: 499
-unsupported_citation_count: 76
-
-After P6.R4:
-low_confidence_count: 454
-unsupported_citation_count: 0
+data/outputs/error_analysis_v2_p6r6f_soft_9_8_final/
 ```
 
-### Next recommended step
+Trạng thái:
 
 ```text
-P6.R5 — Analyze too_many_selected_articles / retrieval noise
+P6.R6f — VERIFIED / FINAL ANSWER STABILITY
 ```
 
-Do not start Phase 7 until P6.R5 analysis is completed or explicitly deferred.
+Ý nghĩa:
 
-## P6.R5 — Analyze too_many_selected_articles / retrieval noise
+* Đưa truncation về 0.
+* Giữ unsupported citation = 0.
+* Phase 6 chuyển trọng tâm sang residual legacy metadata.
 
-### Status
+---
+
+## P6.R7 — Residual legacy metadata inspection
+
+Mục tiêu:
+
+* Phân tích 221 case `legacy_or_unknown_law_id`.
+* Xác định lỗi do answer, selected metadata, canonical metadata, hay heuristic false positive.
+
+Kết quả:
 
 ```text
-PLANNED
+total_low_confidence: 237
+total_legacy_or_unknown_law_id: 221
+unsupported_citation_count_current: 0
+too_many_selected_articles_current: 0
+answer_maybe_truncated_current: 0
+answer_insufficient_basis_current: 17
 ```
 
-### Context
-
-After P6.R4, unsupported citation errors have been eliminated.
-
-Current best post-P6.R4 answer file:
+Trigger chính:
 
 ```text
-data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+answer_mentions_khong_so: 180
+selected_contains_khong_so: 218
+selected_contains_old_code_or_legacy_doc: 216
+version_overlap_suspected: 216
+needs_canonical_metadata_cleanup: 218
+needs_retrieval_filtering: 216
 ```
 
-Current error analysis directory:
+Recommended actions:
 
 ```text
-data/outputs/error_analysis_v2_p6r4_fix_id418/
+answer_patch_possible: 180
+canonical_metadata_cleanup_needed: 38
+no_action_false_positive: 3
 ```
 
-Final P6.R4 metrics:
+Output:
+
+```text
+data/outputs/error_analysis_v2_p6r7_legacy_metadata_residual/
+```
+
+Trạng thái:
+
+```text
+P6.R7 — VERIFIED
+```
+
+Ý nghĩa:
+
+* Residual không phải unsupported citation.
+* Có 2 lớp vấn đề:
+
+  * answer display có “Không số”
+  * selected/canonical metadata chứa “Không số” hoặc legacy overlap
+
+---
+
+## P6.R8 — Targeted legacy answer display patch
+
+Mục tiêu:
+
+* Patch answer text cho các case `answer_patch_possible`.
+* Chỉ xóa lỗi hiển thị `Không số`.
+* Không sửa retrieval/canonical/selected articles.
+* Không gọi LLM.
+
+Kết quả:
+
+```text
+target_patch_ids: 180
+patched_count: 172
+before_contains_khong_so_count: 180
+after_contains_khong_so_count: 144
+non_target_changed_count: 0
+```
+
+Safety:
+
+```text
+row_count_is_2000: True
+unique_id_count_is_2000: True
+empty_answer_ids: []
+think_marker_ids: []
+legal_basis_lost_ids: []
+only_target_ids_changed: True
+```
+
+Trạng thái:
+
+```text
+P6.R8 — SAFE RUNTIME COMPLETED / NEED R8a
+```
+
+Ý nghĩa:
+
+* Patch an toàn nhưng chưa đủ mạnh.
+* Nhiều `Không số` còn nằm trong block `Căn cứ pháp lý`.
+
+---
+
+## P6.R8a — Stronger target-only Khong so cleanup
+
+Mục tiêu:
+
+* Patch tiếp 144 answer còn `Không số` sau P6.R8.
+* Chỉ áp dụng target-only.
+* Làm sạch pattern trong legal basis line:
+
+  * `Điều X - Không số - Tên văn bản`
+  * `Pháp lệnh Không số`
+  * `Luật ... và Không số`
+  * `Ban Ghi Nho Không số`
+
+Kết quả runtime:
+
+```text
+target_patch_ids: 144
+patched_count: 143
+before_contains_khong_so_count: 144
+after_contains_khong_so_count: 4
+non_target_changed_count: 0
+```
+
+Rerun error analysis:
 
 ```text
 total_questions: 2000
-low_confidence_count: 454
+low_confidence_count: 237
 unsupported_citation_count: 0
 ```
 
-Remaining issue counts:
+Rerun residual diagnostic:
 
 ```text
-legacy_or_unknown_law_id: 231
-too_many_selected_articles: 216
-answer_maybe_truncated: 52
-answer_insufficient_basis: 6
-unsupported_citation_in_answer: 0
+answer_mentions_khong_so: 4
+needs_answer_patch: 4
+canonical_metadata_cleanup_needed: 214
+selected_contains_khong_so: 218
+needs_canonical_metadata_cleanup: 218
+needs_retrieval_filtering: 216
 ```
 
-The largest actionable remaining answer/retrieval quality issue is:
+Best answer file sau P6.R8a:
 
 ```text
-too_many_selected_articles: 216
+data/outputs/error_analysis_v2_p6r8a_legacy_answer_patch_stronger/generated_answers_p6r8a_legacy_display_patch.jsonl
 ```
 
-P6.R5 is a diagnostic analysis step. It must not change retrieval, selection, QA generation, or submission logic.
-
-### Goal
-
-Analyze the 216 `too_many_selected_articles` cases and classify whether they are:
+Trạng thái:
 
 ```text
-- valid multi-hop / many-article legal questions;
-- same-law many-article cases;
-- cross-law retrieval noise;
-- legacy/version noise;
-- selector over-inclusion;
-- answer truncation risk;
-- insufficient basis risk;
-- cases requiring manual review.
+P6.R8a — VERIFIED
 ```
 
-The output of P6.R5 should guide whether the next step should be selector pruning, retrieval filtering, law-version normalization, or Phase 7 reranking.
+Ý nghĩa:
 
-### Inputs
+* Answer display issue gần như đã xử lý xong.
+* Residual còn lại chủ yếu là canonical/retrieval metadata, không phải answer.
+
+---
+
+## P6.R9 — Canonical legacy metadata cleanup planning
+
+Mục tiêu:
+
+* Phân tích phần residual metadata sau P6.R8a.
+* Không sửa canonical ngay.
+* Lập kế hoạch cleanup/alias/retrieval filtering an toàn.
+
+Kết quả sau fix filter bug:
 
 ```text
-data/outputs/error_analysis_v2_p6r4_fix_id418/low_confidence_questions.csv
-data/outputs/error_analysis_v2_p6r4_fix_id418/retrieval_debug_report.csv
-data/outputs/retrieval_results.jsonl
-data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl
+status: completed
+input_residual_report_rows: 221
+filtered_residual_rows: 221
+total_selected_article_refs_scanned: 1532
+unique_selected_article_ids: 1114
+canonical_join_missing_count: 0
+grouped_article_rows: 1114
+grouped_law_rows: 448
 ```
 
-### Planned outputs
+Anomaly chính:
 
 ```text
-data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_report.csv
-data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_summary.json
-data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_law_distribution.csv
-data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_count_distribution.csv
-data/outputs/error_analysis_v2_p6r5_too_many_selected/too_many_selected_articles_samples.md
+status_missing_or_unknown: 1532
+modern_and_legacy_overlap_same_question: 806
+law_title_trailing_so: 786
+law_title_duplicate_law_type_or_law_id: 564
+law_id_khong_so: 264
+law_title_contains_khong_so: 264
+law_title_suspicious_normalization: 264
+old_code_or_legacy_doc: 231
 ```
 
-### Planned files
+Recommended actions:
 
 ```text
-backend/evaluation/too_many_selected_analysis.py
-scripts/analyze_too_many_selected_articles.py
-tests/test_too_many_selected_analysis.py
+canonical_metadata_cleanup_candidate: 664
+manual_review_required: 616
+retrieval_filter_candidate: 189
+exact_alias_mapping_candidate: 63
 ```
 
-### Required report columns
+Top affected families:
 
 ```text
-id
-question
-selected_count
-unique_law_count
-unique_law_ids
-unique_law_titles_preview
-unique_article_count
-selected_article_ids_preview
-selected_article_nos_preview
-has_legacy_or_unknown_law_id
-has_answer_maybe_truncated
-has_answer_insufficient_basis
-answer_length_chars
-heuristic_category
-heuristic_reason
-recommended_action
+Bộ luật Lao động: 293
+Luật Thương mại: 221
+Bộ luật Dân sự: 186
+Nghị định xử phạt lao động: 61
+Nghị định/Thông tư thuế: 50
+Luật Doanh nghiệp: 41
+Luật Sở hữu trí tuệ: 33
+Luật Quản lý thuế: 27
 ```
 
-### Heuristic categories
+Output:
 
 ```text
-likely_multihop_valid
-same_law_many_articles
-cross_law_possible_noise
-legacy_or_version_noise
-selector_overinclusive
-answer_truncation_risk
-insufficient_basis_risk
-unknown_needs_manual_review
+data/outputs/error_analysis_v2_p6r9_canonical_legacy_cleanup_plan/
 ```
 
-### Scope constraints
-
-P6.R5 must not modify:
+Các file chính:
 
 ```text
-retrieval logic
-selector logic
-QA prompt
-answer generation logic
-submission builder
-baseline answer files
-P6.R4 output files
+canonical_legacy_metadata_report.csv
+canonical_legacy_grouped_by_article.csv
+canonical_legacy_grouped_by_law.csv
+canonical_legacy_cleanup_summary.json
+canonical_legacy_cleanup_plan.md
+candidate_retrieval_filter_rules.json
+candidate_metadata_cleanup_rules.json
 ```
 
-P6.R5 must not:
+Trạng thái:
 
 ```text
-call LLM/vLLM
-run full 2000 answer generation
-implement Phase 7 reranker
-use Neo4j
-change selected_articles
-overwrite existing P6.R4 artifacts
+P6.R9 — VERIFIED
 ```
 
-### Validation commands
+Ý nghĩa:
 
-```bash
-python -m py_compile \
-  backend/evaluation/too_many_selected_analysis.py \
-  scripts/analyze_too_many_selected_articles.py \
-  tests/test_too_many_selected_analysis.py
-```
+* Không mất canonical join.
+* Vấn đề là metadata canonical hiện có `Không số`, title normalization chưa sạch và overlap giữa văn bản cũ/mới.
+* Chưa nên sửa trực tiếp `legal_articles.parquet`.
+* Nên ưu tiên display-only cleanup / alias planning / retrieval filtering ở nhánh riêng.
 
-```bash
-pytest tests/test_too_many_selected_analysis.py -q
-```
+---
 
-```bash
-python scripts/analyze_too_many_selected_articles.py \
-  --low-confidence data/outputs/error_analysis_v2_p6r4_fix_id418/low_confidence_questions.csv \
-  --retrieval-results data/outputs/retrieval_results.jsonl \
-  --generated-answers data/outputs/generated_answers_v2_p6r4_merged_for_eval_fix_id418.jsonl \
-  --output-dir data/outputs/error_analysis_v2_p6r5_too_many_selected
-```
+## 4. Kết quả cuối Phase 6
 
-### Acceptance criteria
+Best retrieval hiện tại:
 
 ```text
-[ ] Report CSV has 216 rows from current P6.R4 fix output.
-[ ] Summary JSON has total_too_many_selected_cases = 216.
-[ ] Category counts sum to 216.
-[ ] Selected-count distribution is generated.
-[ ] Law distribution is generated.
-[ ] Markdown samples are generated by category.
-[ ] No retrieval/selector/submission logic is changed.
-[ ] No LLM/vLLM call is made.
-[ ] No full 2000 answer generation is run.
-[ ] Unit tests pass.
+data/outputs/error_analysis_v2_p6r6d_selector_tuning_threshold_aligned/config_soft_9_8/retrieval_results_p6r6_tightened.jsonl
 ```
 
-### Expected next decision after P6.R5
-
-Depending on P6.R5 findings:
+Best answer hiện tại:
 
 ```text
-- If most cases are valid multi-hop: keep selector threshold and focus on answer truncation.
-- If many cases are same-law over-inclusion: consider selector cap per law_id.
-- If many cases are cross-law noise: consider retrieval score/metadata filtering before Phase 7.
-- If many cases are legacy/version noise: prioritize law_id/version normalization.
-- If many cases cause answer truncation: consider context packing/fair truncation improvements.
+data/outputs/error_analysis_v2_p6r8a_legacy_answer_patch_stronger/generated_answers_p6r8a_legacy_display_patch.jsonl
 ```
 
-Do not start Phase 7 until P6.R5 analysis is completed or explicitly deferred.
+Error analysis tương ứng:
+
+```text
+data/outputs/error_analysis_v2_p6r8a_legacy_answer_patch_error_analysis/
+```
+
+P6.R9 cleanup planning:
+
+```text
+data/outputs/error_analysis_v2_p6r9_canonical_legacy_cleanup_plan/
+```
+
+Final metrics:
+
+```text
+total_questions: 2000
+low_confidence_count: 237
+unsupported_citation_count: 0
+too_many_selected_articles: 0
+answer_maybe_truncated: 0
+answer_insufficient_basis: 17
+legacy_or_unknown_law_id: 221
+answer_mentions_khong_so: 4
+selected_contains_khong_so: 218
+```
+
+So với P6.R4:
+
+```text
+low_confidence_count: 454 -> 237
+too_many_selected_articles: 216 -> 0
+answer_maybe_truncated: 52 -> 0
+unsupported_citation_count: 0 -> 0
+```
+
+---
+
+## 5. Các quyết định kỹ thuật quan trọng
+
+## 5.1. Không tiếp tục patch answer sau P6.R8a
+
+Lý do:
+
+* `answer_mentions_khong_so` đã giảm từ 180 xuống 4.
+* Residual lớn nhất hiện là `selected_contains_khong_so` và canonical metadata.
+* Patch answer tiếp không xử lý được gốc lỗi.
+
+Quyết định:
+
+```text
+Stop answer display patching after P6.R8a.
+```
+
+---
+
+## 5.2. Không sửa trực tiếp canonical corpus trong Phase 6
+
+Lý do:
+
+* Có 616 case `manual_review_required`.
+* Có 63 case chỉ là alias mapping candidate, chưa đủ chắc để tự động map.
+* Sửa trực tiếp `legal_articles.parquet` có thể làm sai citation hoặc mất traceability.
+
+Quyết định:
+
+```text
+Do not modify legal_articles.parquet in Phase 6.
+```
+
+---
+
+## 5.3. Metadata cleanup nên là nhánh riêng
+
+Các hướng cleanup đề xuất:
+
+1. Display-only canonical metadata cleanup layer.
+2. Retrieval-time legacy filter.
+3. Exact alias mapping.
+4. Full canonical corpus repair/rebuild nếu có nguồn chuẩn hơn.
+
+Quyết định:
+
+```text
+Treat metadata cleanup as a separate post-Phase-6 branch.
+```
+
+---
+
+## 5.4. Phase 7 không dùng để chữa metadata
+
+Phase 7 nên tập trung vào:
+
+* reranking
+* LLM verifier
+* giảm `answer_insufficient_basis`
+* kiểm tra selected_articles trước khi generation
+
+Không nên dùng Phase 7 để:
+
+* sửa `Không số`
+* sửa canonical law_id/law_title
+* map văn bản cũ sang văn bản mới nếu chưa có rule chắc chắn
+
+Quyết định:
+
+```text
+Phase 7 should not mask canonical metadata issues.
+```
+
+---
+
+## 6. Trạng thái tổng thể Phase 6
+
+```text
+P6.T1  — VERIFIED
+P6.T2  — VERIFIED
+P6.R1  — VERIFIED
+P6.R2  — VERIFIED
+P6.R3  — DONE / IMPROVED BY R3.1-R3.2
+P6.R4  — VERIFIED
+P6.R5  — VERIFIED
+P6.R5b — VERIFIED
+P6.R6a — VERIFIED
+P6.R6b — VERIFIED / NOT FINAL CONFIG
+P6.R6c — COMPLETED / NOT FINAL
+P6.R6d — VERIFIED
+P6.R6e — VERIFIED
+P6.R6f — VERIFIED / FINAL ANSWER STABILITY
+P6.R7  — VERIFIED
+P6.R8  — SAFE COMPLETED / SUPERSEDED BY R8a
+P6.R8a — VERIFIED
+P6.R9  — VERIFIED
+```
+
+Final Phase 6 status:
+
+```text
+Phase 6 — COMPLETED / READY FOR PHASE 7
+```
+
+---
+
+## 7. Handoff sang Phase 7
+
+Input nên dùng cho Phase 7:
+
+```text
+Retrieval:
+data/outputs/error_analysis_v2_p6r6d_selector_tuning_threshold_aligned/config_soft_9_8/retrieval_results_p6r6_tightened.jsonl
+
+Answers:
+data/outputs/error_analysis_v2_p6r8a_legacy_answer_patch_stronger/generated_answers_p6r8a_legacy_display_patch.jsonl
+
+Error analysis:
+data/outputs/error_analysis_v2_p6r8a_legacy_answer_patch_error_analysis/
+
+Metadata cleanup planning:
+data/outputs/error_analysis_v2_p6r9_canonical_legacy_cleanup_plan/
+```
+
+Phase 7 nên tập trung vào:
+
+* reranker interface
+* rerank selected candidates trước article selection
+* LLM verifier kiểm tra selected_articles có đủ căn cứ không
+* giảm `answer_insufficient_basis`
+* giảm noise trong selected_articles nhưng không làm mất recall
+
+Không nên làm ngay trong Phase 7:
+
+* sửa canonical `legal_articles.parquet`
+* alias mapping tự động cho `Không số`
+* lọc bỏ toàn bộ văn bản cũ nếu chưa có rule chắc chắn
+* regenerate toàn bộ answer nếu chưa có thay đổi retrieval/selection đáng kể
+
+---
+
+## 8. Kết luận
+
+Phase 6 đã hoàn thành vai trò đánh giá và hardening pipeline. Các lỗi nghiêm trọng về unsupported citation, too many selected articles và truncated answers đã được xử lý về 0. Low-confidence giảm đáng kể từ 454 xuống 237. Phần residual còn lại chủ yếu là metadata/canonical legacy, đã được phân tích và lập kế hoạch cleanup nhưng chưa nên sửa trực tiếp trong Phase 6.
+
+Pipeline hiện đã đủ điều kiện chuyển sang Phase 7 với baseline sạch hơn và có đầy đủ diagnostic artifacts để kiểm soát rủi ro.
+
 
 ---
 # Phase 7 — Reranker / LLM Verifier
