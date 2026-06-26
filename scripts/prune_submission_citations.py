@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -95,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", required=True)
     parser.add_argument("--changes", required=True)
     parser.add_argument("--zip-output", default=None)
-    parser.add_argument("--variant", choices=("a", "b", "c", "d", "e", "f"), required=True)
+    parser.add_argument("--variant", choices=("a", "b", "c", "d", "e", "f", "g", "h", "i"), required=True)
     return parser
 
 
@@ -159,6 +160,11 @@ def prune_submission(items: list[dict[str, Any]], *, variant: str) -> tuple[list
         "variant": variant,
         "docs_caps": docs_caps_for_report(variant),
         "articles_caps": articles_caps_for_report(variant),
+        "rescued_articles_count": sum(len(change.get("rescued_articles", [])) for change in changes),
+        "rescued_records_count": sum(bool(change.get("rescued_articles")) for change in changes),
+        "rescue_candidates_count": sum(change.get("rescue_candidates_count", 0) for change in changes),
+        "rescue_skipped_local_count": sum(change.get("rescue_skipped_local_count", 0) for change in changes),
+        "rescue_skipped_old_law_count": sum(change.get("rescue_skipped_old_law_count", 0) for change in changes),
     }
     validate_items(output)
     return output, report, changes
@@ -174,14 +180,29 @@ def prune_record(item: dict[str, Any], *, variant: str) -> tuple[dict[str, Any],
         return dict(item), build_change(item, before_docs, before_articles, before_docs, before_articles, warnings + ["no parseable articles; rolled back"], True)
 
     question_type = determine_question_type(item["question"])
-    caps = caps_for_variant(variant, question_type)
-    scored = score_articles(
+    scoring = score_articles(
         parsed_articles,
         question=item["question"],
         answer=item["answer"],
         variant=variant,
     )
-    selected = select_articles(scored, caps=caps, variant=variant, answer=item["answer"])
+
+    if variant in {"g", "h", "i"}:
+        base_caps = caps_for_variant("a", question_type)
+        base_selected = apply_docs_cap_to_entries(select_articles(scoring, caps=base_caps, variant="a", answer=item["answer"]), base_caps)
+        selected, rescue_meta = apply_targeted_rescue(
+            variant=variant,
+            original_item=item,
+            scored=scoring,
+            base_selected=base_selected,
+            question_type=question_type,
+        )
+        caps = caps_for_variant(variant, question_type)
+    else:
+        caps = caps_for_variant(variant, question_type)
+        selected = select_articles(scoring, caps=caps, variant=variant, answer=item["answer"])
+        rescue_meta = empty_rescue_meta()
+
     selected_articles = [entry.ref.raw for entry in selected]
     selected_docs = rebuild_docs_from_articles(selected_articles)
     if len(selected_docs) > caps.max_docs:
@@ -191,25 +212,197 @@ def prune_record(item: dict[str, Any], *, variant: str) -> tuple[dict[str, Any],
 
     if not selected_docs or not selected_articles:
         warnings.append("pruning would empty refs; rolled back")
-        return dict(item), build_change(item, before_docs, before_articles, before_docs, before_articles, warnings, True)
+        return dict(item), build_change(
+            item,
+            before_docs,
+            before_articles,
+            before_docs,
+            before_articles,
+            warnings,
+            True,
+            variant=variant,
+            rescue_meta=rescue_meta,
+        )
 
     patched = dict(item)
     patched["relevant_articles"] = selected_articles
     patched["relevant_docs"] = selected_docs
-    return patched, build_change(item, before_docs, before_articles, selected_docs, selected_articles, warnings, False)
+    return patched, build_change(
+        item,
+        before_docs,
+        before_articles,
+        selected_docs,
+        selected_articles,
+        warnings,
+        False,
+        variant=variant,
+        rescue_meta=rescue_meta,
+    )
 
+def empty_rescue_meta() -> dict[str, Any]:
+    return {
+        "rescued_articles": [],
+        "rescue_candidates_count": 0,
+        "rescue_skipped_local_count": 0,
+        "rescue_skipped_old_law_count": 0,
+    }
+
+
+def apply_targeted_rescue(
+    *,
+    variant: str,
+    original_item: dict[str, Any],
+    scored: list[ScoredArticle],
+    base_selected: list[ScoredArticle],
+    question_type: str,
+) -> tuple[list[ScoredArticle], dict[str, Any]]:
+    caps = caps_for_variant(variant, question_type)
+    selected_by_index = {entry.index: entry for entry in base_selected}
+    retained_refs = [entry.ref for entry in base_selected]
+    removed = [entry for entry in scored if entry.index not in selected_by_index]
+    meta = empty_rescue_meta()
+    meta["rescue_candidates_count"] = len(removed)
+
+    rescue_pool: list[ScoredArticle] = []
+    if variant == "g":
+        rescue_pool = [
+            entry for entry in removed
+            if article_explicitly_mentioned(entry.ref, original_item["answer"])
+            or is_article_in_legal_basis_section(entry.ref, original_item["answer"])
+        ]
+    elif variant == "h":
+        if is_high_risk_for_recall(original_item, base_selected, scored, question_type):
+            rescue_pool = [entry for entry in sorted(removed, key=lambda item: (-item.score, item.index)) if entry_score_for_rescue(entry) >= RESCUE_SCORE_THRESHOLD][:1]
+    elif variant == "i":
+        rescue_limit = 2 if question_type == "list_policy" else 1
+        rescue_pool = [
+            entry for entry in sorted(removed, key=lambda item: (-item.score, item.index))
+            if is_domain_primary_law(entry.ref, original_item["question"], original_item["answer"])
+        ][:rescue_limit]
+
+    for entry in rescue_pool:
+        if len(selected_by_index) >= caps.max_articles:
+            break
+        if is_local_document(entry.ref) and not has_local_indicator(original_item["question"]):
+            meta["rescue_skipped_local_count"] += 1
+            continue
+        if old_law_blocked_by_retained(entry.ref, retained_refs, original_item["answer"]):
+            meta["rescue_skipped_old_law_count"] += 1
+            continue
+        selected_by_index[entry.index] = entry
+        retained_refs.append(entry.ref)
+        meta["rescued_articles"].append(entry.ref.raw)
+
+    return [entry for entry in scored if entry.index in selected_by_index], meta
+
+
+RESCUE_SCORE_THRESHOLD = 80
+
+
+def entry_score_for_rescue(entry: ScoredArticle) -> int:
+    return entry.score
+
+
+def get_legal_basis_section(answer: str) -> str:
+    normalized = normalize_for_matching(answer)
+    markers = ("can cu phap ly", "căn cứ pháp lý", "cÄƒn cá»© phÃ¡p lÃ½")
+    for marker in markers:
+        marker_norm = normalize_for_matching(marker)
+        index = normalized.find(marker_norm)
+        if index >= 0:
+            return normalized[index:]
+    return ""
+
+
+def is_article_in_legal_basis_section(ref: ArticleRef, answer: str) -> bool:
+    section = get_legal_basis_section(answer)
+    if not section:
+        return False
+    return normalize_for_matching(ref.law_id) in section or normalize_for_matching(ref.article_no) in section
+
+
+def same_law_as_retained(ref: ArticleRef, retained_articles: list[ArticleRef]) -> bool:
+    return any(ref.law_id == retained.law_id for retained in retained_articles)
+
+
+def is_high_risk_for_recall(
+    original_item: dict[str, Any],
+    base_selected: list[ScoredArticle],
+    scored: list[ScoredArticle],
+    question_type: str,
+) -> bool:
+    question = normalize_for_matching(original_item["question"])
+    recall_phrases = ("nhung gi", "bao gom", "cac truong hop", "noi dung", "chinh sach", "dieu kien")
+    return (
+        len(scored) >= 7
+        and len(base_selected) <= 3
+        and (question_type == "list_policy" or any(phrase in question for phrase in recall_phrases))
+    )
+
+
+def old_law_blocked_by_retained(ref: ArticleRef, retained_articles: list[ArticleRef], answer: str) -> bool:
+    retained_laws = {article.law_id for article in retained_articles}
+    for old_law, new_law in CONFLICT_GROUPS:
+        if ref.law_id == old_law and new_law in retained_laws and normalize_for_matching(old_law) not in normalize_for_matching(answer):
+            return True
+    return False
+
+
+def is_domain_primary_law(ref: ArticleRef, question: str, answer: str) -> bool:
+    text = normalize_for_matching(f"{question} {answer}")
+    ref_text = normalize_for_matching(f"{ref.law_id} {ref.law_title}")
+    domain_sources = {
+        "tax": {
+            "signals": ("thue", "khai thue", "nop thue", "tien cham nop", "le phi mon bai", "hoa don"),
+            "sources": ("38/2019/qh14", "78/2006/qh11", "luat quan ly thue", "126/2020/nd-cp", "125/2020/nd-cp"),
+        },
+        "labor": {
+            "signals": ("lao dong", "nguoi lao dong", "hop dong lao dong", "bao hiem xa hoi", "bhxh", "bao hiem that nghiep"),
+            "sources": ("45/2019/qh14", "bo luat lao dong", "41/2024/qh15", "luat bao hiem xa hoi", "12/2022/nd-cp"),
+        },
+        "sme": {
+            "signals": ("doanh nghiep nho va vua", "dnnvv", "ho tro doanh nghiep", "khoi nghiep sang tao", "cum lien ket nganh", "chuoi gia tri", "quy phat trien doanh nghiep nho va vua"),
+            "sources": ("04/2017/qh14", "luat ho tro doanh nghiep nho va vua", "80/2021/nd-cp", "39/2019/nd-cp", "34/2018/nd-cp"),
+        },
+        "bidding": {
+            "signals": ("dau thau", "nha thau", "goi thau", "ho so du thau", "lua chon nha thau"),
+            "sources": ("22/2023/qh15", "luat dau thau", "24/2024/nd-cp"),
+        },
+        "accounting": {
+            "signals": ("ke toan", "bao cao tai chinh", "tai khoan", "so ke toan", "chung tu ke toan"),
+            "sources": ("200/2014/tt-btc", "133/2016/tt-btc", "luat ke toan"),
+        },
+    }
+    for config in domain_sources.values():
+        if any(signal in text for signal in config["signals"]):
+            return any(source in ref_text for source in config["sources"])
+    return False
+
+def apply_docs_cap_to_entries(entries: list[ScoredArticle], caps: Caps) -> list[ScoredArticle]:
+    selected_docs: list[str] = []
+    selected: list[ScoredArticle] = []
+    for entry in entries:
+        doc_ref = entry.ref.doc_ref
+        if doc_ref not in selected_docs:
+            if len(selected_docs) >= caps.max_docs:
+                continue
+            selected_docs.append(doc_ref)
+        selected.append(entry)
+    return selected
 
 def score_articles(refs: list[ArticleRef], *, question: str, answer: str, variant: str) -> list[ScoredArticle]:
     answer_folded = answer.casefold()
     question_folded = question.casefold()
+    answer_normalized = normalize_for_matching(answer)
+    question_normalized = normalize_for_matching(question)
     combined = f"{question} {answer}"
     laws_present = {ref.law_id for ref in refs}
     scored: list[ScoredArticle] = []
     for index, ref in enumerate(refs):
         score = 0
         reasons: list[str] = []
-        law_in_answer = ref.law_id.casefold() in answer_folded
-        article_in_answer = ref.article_no.casefold() in answer_folded
+        law_in_answer = ref.law_id.casefold() in answer_folded or normalize_for_matching(ref.law_id) in answer_normalized
+        article_in_answer = ref.article_no.casefold() in answer_folded or normalize_for_matching(ref.article_no) in answer_normalized
         if law_in_answer:
             score += 100
             reasons.append("law_id_in_answer")
@@ -219,7 +412,7 @@ def score_articles(refs: list[ArticleRef], *, question: str, answer: str, varian
         if law_in_answer and article_in_answer:
             score += 60
             reasons.append("law_and_article_in_answer")
-        if ref.law_id.casefold() in question_folded:
+        if ref.law_id.casefold() in question_folded or normalize_for_matching(ref.law_id) in question_normalized:
             score += 30
             reasons.append("law_id_in_question")
         if title_keyword_overlap(ref.law_title, combined):
@@ -297,9 +490,27 @@ def rebuild_docs_from_articles(articles: list[str]) -> list[str]:
 
 def determine_question_type(question: str) -> str:
     text = normalize_for_matching(question)
-    if any(normalize_for_matching(phrase) in text for phrase in SINGLE_FACT_PHRASES):
+    single_fact_markers = (
+        *(normalize_for_matching(phrase) for phrase in SINGLE_FACT_PHRASES),
+        "bao lau",
+        "may ngay",
+        "ty le",
+        "muc phat",
+        "thoi han",
+        "dieu kien gi",
+        "ai bi xu phat",
+    )
+    list_policy_markers = (
+        *(normalize_for_matching(phrase) for phrase in LIST_POLICY_PHRASES),
+        "nhung gi",
+        "nhung noi dung gi",
+        "nhung chinh sach nao",
+        "bao gom",
+        "cac truong hop",
+    )
+    if any(phrase in text for phrase in single_fact_markers):
         return "single_fact"
-    if any(normalize_for_matching(phrase) in text for phrase in LIST_POLICY_PHRASES):
+    if any(phrase in text for phrase in list_policy_markers):
         return "list_policy"
     return "default"
 
@@ -315,7 +526,7 @@ def caps_table_for_variant(variant: str) -> dict[str, Caps]:
             "list_policy": Caps(max_docs=3, max_articles=4),
             "default": Caps(max_docs=2, max_articles=3),
         }
-    if variant == "d" or variant == "f":
+    if variant in {"d", "f", "g", "h", "i"}:
         return {
             "single_fact": Caps(max_docs=2, max_articles=4),
             "list_policy": Caps(max_docs=4, max_articles=6),
@@ -376,8 +587,13 @@ def mention_strength(ref: ArticleRef, answer: str) -> int:
 
 def normalize_for_matching(value: str) -> str:
     repaired = repair_common_mojibake(str(value or ""))
-    repaired = repaired.replace("đ", "d").replace("Đ", "D")
+    repaired = strip_accents(repaired.replace("đ", "d").replace("Đ", "D"))
     return re.sub(r"\s+", " ", repaired.casefold()).strip()
+
+
+def strip_accents(value: str) -> str:
+    decomposed = unicodedata.normalize("NFD", value)
+    return "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
 
 
 def repair_common_mojibake(value: str) -> str:
@@ -438,20 +654,28 @@ def build_change(
     after_articles: list[str],
     warnings: list[str],
     rolled_back: bool,
+    *,
+    variant: str | None = None,
+    rescue_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    rescue_meta = rescue_meta or empty_rescue_meta()
     return {
         "id": item["id"],
+        "variant": variant,
         "changed": before_docs != after_docs or before_articles != after_articles,
         "rolled_back": rolled_back,
         "before_docs": before_docs,
         "after_docs": after_docs,
         "before_articles": before_articles,
         "after_articles": after_articles,
+        "rescued_articles": rescue_meta.get("rescued_articles", []),
         "removed_docs": [doc for doc in before_docs if doc not in after_docs],
         "removed_articles": [article for article in before_articles if article not in after_articles],
+        "rescue_candidates_count": rescue_meta.get("rescue_candidates_count", 0),
+        "rescue_skipped_local_count": rescue_meta.get("rescue_skipped_local_count", 0),
+        "rescue_skipped_old_law_count": rescue_meta.get("rescue_skipped_old_law_count", 0),
         "warnings": warnings,
     }
-
 
 def load_submission(path: str | Path) -> list[dict[str, Any]]:
     loaded = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -507,6 +731,19 @@ def write_flat_zip(results_path: str | Path, zip_path: str | Path) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

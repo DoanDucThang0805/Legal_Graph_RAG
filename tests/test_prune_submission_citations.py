@@ -265,3 +265,132 @@ def test_existing_variants_a_b_c_still_work() -> None:
         assert patched["relevant_articles"]
         assert patched["relevant_docs"]
         assert change["rolled_back"] is False
+
+
+def test_variant_g_rescues_answer_mentioned_removed_article() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    record = item("Câu hỏi mặc định?", "Theo 01/2020/QH14.", articles)
+
+    patched_a, _ = module.prune_record(record, variant="a")
+    patched_g, change = module.prune_record(record, variant="g")
+
+    assert len(patched_a["relevant_articles"]) == 4
+    assert len(patched_g["relevant_articles"]) == 5
+    assert articles[4] in patched_g["relevant_articles"]
+    assert change["rescued_articles"]
+
+
+
+def test_variant_g_rescues_legal_basis_article() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    answer = "Theo Điều 1; Điều 2; Điều 3; Điều 4.\nCăn cứ pháp lý:\n- Điều 5"
+    record = item("Câu hỏi mặc định?", answer, articles)
+
+    patched, change = module.prune_record(record, variant="g")
+
+    assert articles[4] in patched["relevant_articles"]
+    assert articles[4] in change["rescued_articles"]
+
+def test_variant_g_does_not_rescue_unmentioned_noise() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    record = item("Câu hỏi mặc định?", "Theo Điều 1.", articles)
+
+    patched_a, _ = module.prune_record(record, variant="a")
+    patched_g, change = module.prune_record(record, variant="g")
+
+    assert patched_g["relevant_articles"] == patched_a["relevant_articles"]
+    assert change["rescued_articles"] == []
+
+
+
+def test_variant_h_rescues_one_article_for_high_risk_list_policy() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 8)]
+    record = item("Doanh nghiệp cần đáp ứng điều kiện gì?", "Theo Điều 1, Điều 2, Điều 3 và Điều 4.", articles)
+
+    patched, change = module.prune_record(record, variant="h")
+
+    assert len(change["rescued_articles"]) == 1
+    assert articles[3] in change["rescued_articles"]
+    assert articles[3] in patched["relevant_articles"]
+
+def test_variant_h_does_not_rescue_low_score_candidate() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 8)]
+    record = item("Doanh nghiệp cần đáp ứng điều kiện gì?", "Không nêu điều cụ thể.", articles)
+
+    patched_a, _ = module.prune_record(record, variant="a")
+    patched_h, change = module.prune_record(record, variant="h")
+
+    assert patched_h["relevant_articles"] == patched_a["relevant_articles"]
+    assert change["rescued_articles"] == []
+
+def test_variant_i_rescues_domain_primary_law_article() -> None:
+    module = load_prune_module()
+    articles = [
+        article("01/2020/QH14", "Luật A", "Điều 1"),
+        article("01/2020/QH14", "Luật A", "Điều 2"),
+        article("01/2020/QH14", "Luật A", "Điều 3"),
+        article("01/2020/QH14", "Luật A", "Điều 4"),
+        article("38/2019/QH14", "Luật Quản lý thuế", "Điều 5"),
+    ]
+    record = item("Doanh nghiệp nộp thuế thế nào?", "Theo Điều 1, Điều 2, Điều 3 và Điều 4.", articles)
+
+    patched, change = module.prune_record(record, variant="i")
+
+    assert articles[4] in patched["relevant_articles"]
+    assert articles[4] in change["rescued_articles"]
+
+def test_variant_i_does_not_rescue_local_doc_without_local_question() -> None:
+    module = load_prune_module()
+    articles = [
+        article("01/2020/QH14", "Luật A", "Điều 1"),
+        article("02/2020/QH14", "Luật B", "Điều 2"),
+        article("03/2020/QH14", "Luật C", "Điều 3"),
+        article("04/2020/QH14", "Luật D", "Điều 4"),
+        article("01/2020/QĐ-UBND", "QĐ-UBND Luật hỗ trợ doanh nghiệp nhỏ và vừa", "Điều 5"),
+    ]
+    record = item("Doanh nghiệp nhỏ và vừa được hỗ trợ gì?", "Theo Điều 1.", articles)
+
+    patched, change = module.prune_record(record, variant="i")
+
+    assert articles[4] not in patched["relevant_articles"]
+    assert change["rescue_skipped_local_count"] >= 1
+
+
+
+def test_variant_i_does_not_rescue_old_law_when_new_law_retained() -> None:
+    module = load_prune_module()
+    articles = [
+        article("38/2019/QH14", "Luật Quản lý thuế", "Điều 1"),
+        article("38/2019/QH14", "Luật Quản lý thuế", "Điều 2"),
+        article("38/2019/QH14", "Luật Quản lý thuế", "Điều 3"),
+        article("38/2019/QH14", "Luật Quản lý thuế", "Điều 4"),
+        article("78/2006/QH11", "Luật Quản lý thuế", "Điều 5"),
+    ]
+    record = item("Nộp thuế thế nào?", "Theo Điều 1 của 38/2019/QH14.", articles)
+
+    patched, change = module.prune_record(record, variant="i")
+
+    assert articles[4] not in patched["relevant_articles"]
+    assert change["rescue_skipped_old_law_count"] >= 1
+
+def test_existing_variants_a_to_f_still_work() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    record = item("Câu hỏi mặc định?", "Theo Điều 1.", articles)
+
+    for variant in ("a", "b", "c", "d", "e", "f"):
+        patched, change = module.prune_record(record, variant=variant)
+        assert patched["relevant_articles"]
+        assert patched["relevant_docs"]
+        assert change["rolled_back"] is False
+
+
+
+
+
+
