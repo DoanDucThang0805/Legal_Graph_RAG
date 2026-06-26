@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -10,10 +10,10 @@ from zipfile import ZipFile
 import pytest
 
 
-ARTICLE_1 = "04/2017/QH14|Luật hỗ trợ doanh nghiệp nhỏ và vừa|Điều 4"
-ARTICLE_2 = "05/2018/QH14|Luật khác|Điều 5"
-DOC_1 = "04/2017/QH14|Luật hỗ trợ doanh nghiệp nhỏ và vừa"
-DOC_2 = "05/2018/QH14|Luật khác"
+ARTICLE_1 = "04/2017/QH14|Luáº­t há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a|Äiá»u 4"
+ARTICLE_2 = "05/2018/QH14|Luáº­t khÃ¡c|Äiá»u 5"
+DOC_1 = "04/2017/QH14|Luáº­t há»— trá»£ doanh nghiá»‡p nhá» vÃ  vá»«a"
+DOC_2 = "05/2018/QH14|Luáº­t khÃ¡c"
 
 
 def load_patch_module() -> Any:
@@ -30,8 +30,8 @@ def load_patch_module() -> Any:
 def sample_item(**overrides: Any) -> dict[str, Any]:
     item = {
         "id": 1,
-        "question": "Câu hỏi?",
-        "answer": "Theo Điều 4, nội dung trả lời.",
+        "question": "CÃ¢u há»i?",
+        "answer": "Theo Äiá»u 4, ná»™i dung tráº£ lá»i.",
         "relevant_docs": [DOC_1],
         "relevant_articles": [ARTICLE_1],
     }
@@ -62,23 +62,67 @@ def test_validate_schema_missing_required_field_raises() -> None:
 
 def test_removes_disclaimer_from_answer() -> None:
     module = load_patch_module()
-    answer = "Theo Điều 4, được hỗ trợ. Lưu ý: Đây là thông tin tham khảo dựa trên căn cứ được cung cấp."
+    answer = "Theo Äiá»u 4, Ä‘Æ°á»£c há»— trá»£. LÆ°u Ã½: ÄÃ¢y lÃ  thÃ´ng tin tham kháº£o dá»±a trÃªn cÄƒn cá»© Ä‘Æ°á»£c cung cáº¥p."
 
     patched, disclaimer_count, leakage_count = module.patch_answer(answer, module.PatchOptions())
 
-    assert patched == "Theo Điều 4, được hỗ trợ."
+    assert patched == "Theo Äiá»u 4, Ä‘Æ°á»£c há»— trá»£."
     assert disclaimer_count == 1
     assert leakage_count == 0
 
 
+
+def test_removes_residual_thong_tin_tham_khao_disclaimer_lines() -> None:
+    module = load_patch_module()
+    variants = [
+        "Th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9 \u0111\u01b0\u1ee3c cung c\u1ea5p.",
+        "L\u01b0u \u00fd: Th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9 [A2].",
+        "L\u01b0u \u00fd th\u00f4ng tin tham kh\u1ea3o: C\u0103n c\u1ee9 \u0110i\u1ec1u 84",
+        "Th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9 [A1], [A2].",
+        "L\u01b0u \u00fd: \u0110\u00e2y l\u00e0 th\u00f4ng tin tham kh\u1ea3o d\u1ef1a",
+        "L\u01b0u \u00fd: \u0110\u00e2y l\u00e0 th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9 \u0111\u01b0\u1ee3c",
+        "L\u01b0u \u00fd: \u0110\u00e2y l\u00e0 th\u00f4ng tin tham kh\u1ea3o",
+        "L\u01b0u \u00fd \u0111\u00e2y l\u00e0 th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9",
+    ]
+    answer = "Theo \u0110i\u1ec1u 4, n\u1ed9i dung ch\u00ednh.\n" + "\n".join(variants)
+
+    patched, disclaimer_count, _ = module.patch_answer(answer, module.PatchOptions())
+
+    assert patched == "Theo \u0110i\u1ec1u 4, n\u1ed9i dung ch\u00ednh."
+    assert disclaimer_count == len(variants)
+
+
+
+def test_does_not_remove_non_disclaimer_tham_khao_line() -> None:
+    module = load_patch_module()
+    answer = "Doanh nghi\u1ec7p c\u00f3 th\u1ec3 tham kh\u1ea3o quy \u0111\u1ecbnh t\u1ea1i \u0110i\u1ec1u 4."
+
+    patched, disclaimer_count, _ = module.patch_answer(answer, module.PatchOptions())
+
+    assert patched == answer
+    assert disclaimer_count == 0
+
+
+
+def test_answer_cleanup_rollback_when_only_disclaimer() -> None:
+    module = load_patch_module()
+    item = sample_item(answer="Th\u00f4ng tin tham kh\u1ea3o d\u1ef1a tr\u00ean c\u0103n c\u1ee9 [A1].")
+    stats = module.PatchStats()
+
+    patched, change = module.patch_record(item, options=module.PatchOptions(), stats=stats)
+
+    assert patched["answer"] == item["answer"]
+    assert "rolled back answer" in change.warnings[0]
+    assert stats.rollback_count == 1
+
 def test_removes_internal_leakage_from_answer() -> None:
     module = load_patch_module()
-    answer = "Theo thông tin được cung cấp trong selected_articles/context, doanh nghiệp được hỗ trợ theo Điều 4."
+    answer = "Theo thÃ´ng tin Ä‘Æ°á»£c cung cáº¥p trong selected_articles/context, doanh nghiá»‡p Ä‘Æ°á»£c há»— trá»£ theo Äiá»u 4."
 
     patched, _, leakage_count = module.patch_answer(answer, module.PatchOptions())
 
     assert "selected_articles/context" not in patched
-    assert patched == "doanh nghiệp được hỗ trợ theo Điều 4."
+    assert patched == "doanh nghiá»‡p Ä‘Æ°á»£c há»— trá»£ theo Äiá»u 4."
     assert leakage_count == 1
 
 
@@ -100,8 +144,8 @@ def test_deduplicates_docs_and_articles_preserving_order() -> None:
 
 def test_removes_khong_so_refs() -> None:
     module = load_patch_module()
-    khong_so_article = "Không số|Văn bản Không số|Điều 1"
-    khong_so_doc = "Không số|Văn bản Không số"
+    khong_so_article = "KhÃ´ng sá»‘|VÄƒn báº£n KhÃ´ng sá»‘|Äiá»u 1"
+    khong_so_doc = "KhÃ´ng sá»‘|VÄƒn báº£n KhÃ´ng sá»‘"
 
     docs, articles, warnings, counters = module.patch_references(
         [DOC_1, khong_so_doc],
@@ -117,8 +161,8 @@ def test_removes_khong_so_refs() -> None:
 
 def test_remove_khong_so_rollback_when_articles_would_be_empty() -> None:
     module = load_patch_module()
-    khong_so_article = "Không số|Văn bản Không số|Điều 1"
-    khong_so_doc = "Không số|Văn bản Không số"
+    khong_so_article = "KhÃ´ng sá»‘|VÄƒn báº£n KhÃ´ng sá»‘|Äiá»u 1"
+    khong_so_doc = "KhÃ´ng sá»‘|VÄƒn báº£n KhÃ´ng sá»‘"
 
     docs, articles, warnings, counters = module.patch_references(
         [khong_so_doc],
@@ -134,10 +178,10 @@ def test_remove_khong_so_rollback_when_articles_would_be_empty() -> None:
 
 def test_optional_prune_keeps_top_n_articles() -> None:
     module = load_patch_module()
-    article_3 = "06/2019/QH14|Luật thứ ba|Điều 6"
+    article_3 = "06/2019/QH14|Luáº­t thá»© ba|Äiá»u 6"
 
     docs, articles, warnings, counters = module.patch_references(
-        [DOC_1, DOC_2, "06/2019/QH14|Luật thứ ba"],
+        [DOC_1, DOC_2, "06/2019/QH14|Luáº­t thá»© ba"],
         [ARTICLE_1, ARTICLE_2, article_3],
         options=module.PatchOptions(enable_prune=True, max_articles=2, max_docs=5),
     )
@@ -256,3 +300,4 @@ def test_patch_does_not_call_external_services(monkeypatch) -> None:
     patched, _, _ = module.patch_results_items([sample_item()], options=module.PatchOptions())
 
     assert patched[0]["id"] == 1
+

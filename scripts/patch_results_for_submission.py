@@ -1,4 +1,4 @@
-"""Deterministically patch a results.json candidate for safer submission."""
+﻿"""Deterministically patch a results.json candidate for safer submission."""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ LOGGER = logging.getLogger(__name__)
 REQUIRED_FIELDS = {"id", "question", "answer", "relevant_docs", "relevant_articles"}
 
 DISCLAIMER_PATTERNS = (
-    r"Lưu\s+ý\s*:?\s*đây\s+là\s+thông\s+tin\s+tham\s+khảo\s+dựa\s+trên\s+căn\s+cứ\s+được\s+cung\s+cấp\.?",
-    r"Đây\s+là\s+thông\s+tin\s+tham\s+khảo\s+dựa\s+trên\s+căn\s+cứ\s+được\s+cung\s+cấp\.?",
+    r"LÆ°u\s+Ã½\s*:?\s*Ä‘Ã¢y\s+lÃ \s+thÃ´ng\s+tin\s+tham\s+kháº£o\s+dá»±a\s+trÃªn\s+cÄƒn\s+cá»©\s+Ä‘Æ°á»£c\s+cung\s+cáº¥p\.?",
+    r"ÄÃ¢y\s+lÃ \s+thÃ´ng\s+tin\s+tham\s+kháº£o\s+dá»±a\s+trÃªn\s+cÄƒn\s+cá»©\s+Ä‘Æ°á»£c\s+cung\s+cáº¥p\.?",
 )
 INTERNAL_LEAKAGE_PATTERNS = (
-    r"Theo\s+thông\s+tin\s+được\s+cung\s+cấp\s+trong\s+selected_articles/context,?\s*",
+    r"Theo\s+thÃ´ng\s+tin\s+Ä‘Æ°á»£c\s+cung\s+cáº¥p\s+trong\s+selected_articles/context,?\s*",
     r"trong\s+selected_articles/context",
     r"selected_articles/context",
 )
@@ -272,7 +272,10 @@ def patch_answer(answer: str, options: PatchOptions) -> tuple[str, int, int]:
     leakage_count = 0
 
     if options.remove_disclaimer:
-        patched, disclaimer_count = remove_patterns(patched, DISCLAIMER_PATTERNS)
+        patched, inline_disclaimer_count = remove_inline_disclaimer_suffixes(patched)
+        patched, pattern_disclaimer_count = remove_patterns(patched, DISCLAIMER_PATTERNS)
+        patched, line_disclaimer_count = remove_disclaimer_lines(patched)
+        disclaimer_count += inline_disclaimer_count + pattern_disclaimer_count + line_disclaimer_count
     if options.remove_internal_leakage:
         patched, leakage_count = remove_patterns(patched, INTERNAL_LEAKAGE_PATTERNS)
     return normalize_answer_spacing(patched), disclaimer_count, leakage_count
@@ -286,6 +289,67 @@ def remove_patterns(text: str, patterns: Sequence[str]) -> tuple[str, int]:
         total += count
     return patched, total
 
+
+
+def remove_inline_disclaimer_suffixes(text: str) -> tuple[str, int]:
+    lines: list[str] = []
+    removed_count = 0
+    for line in text.splitlines():
+        prefix = find_inline_disclaimer_prefix(line)
+        if prefix is None:
+            lines.append(line)
+            continue
+        lines.append(line[:prefix].rstrip())
+        removed_count += 1
+    return "\n".join(lines), removed_count
+
+def remove_disclaimer_lines(text: str) -> tuple[str, int]:
+    """Remove residual disclaimer lines without touching legal analysis lines."""
+
+    kept_lines: list[str] = []
+    removed_count = 0
+    for line in text.splitlines():
+        if is_disclaimer_line(line):
+            removed_count += 1
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines), removed_count
+
+
+def find_inline_disclaimer_prefix(line: str) -> int | None:
+    markers = (
+        "Lưu ý:",
+        "Lưu ý",
+        "LÆ°u Ã½:",
+        "LÆ°u Ã½",
+        "Thông tin tham khảo",
+        "ThÃ´ng tin tham kháº£o",
+        "Đây là thông tin tham khảo",
+        "ÄÃ¢y lÃ  thÃ´ng tin tham kháº£o",
+    )
+    for marker in markers:
+        index = line.find(marker)
+        if index < 0:
+            continue
+        suffix = line[index:]
+        if is_disclaimer_line(suffix):
+            return index
+    return None
+
+def is_disclaimer_line(line: str) -> bool:
+    normalized = normalize_for_matching(line)
+    if "thong tin tham khao" not in normalized:
+        return False
+
+    disclaimer_prefixes = (
+        "thong tin tham khao",
+        "luu y thong tin tham khao",
+        "luu y: thong tin tham khao",
+        "luu y day la thong tin tham khao",
+        "luu y: day la thong tin tham khao",
+        "day la thong tin tham khao",
+    )
+    return normalized.startswith(disclaimer_prefixes)
 
 def patch_references(
     docs: list[str],
@@ -402,15 +466,42 @@ def deduplicate_preserve_order(values: list[str]) -> list[str]:
     return result
 
 
+
+def normalize_for_matching(value: str) -> str:
+    normalized = repair_common_mojibake(str(value or ""))
+    return re.sub(r"\s+", " ", strip_accents(normalized).casefold()).strip()
+
+
+def repair_common_mojibake(value: str) -> str:
+    replacements = {
+        "KhÃ´ng sá»‘": "Không số",
+        "khÃ´ng sá»‘": "không số",
+        "LÆ°u Ã½": "Lưu ý",
+        "lÆ°u Ã½": "lưu ý",
+        "ThÃ´ng tin tham kháº£o": "Thông tin tham khảo",
+        "thÃ´ng tin tham kháº£o": "thông tin tham khảo",
+        "ÄÃ¢y lÃ ": "Đây là",
+        "Ä‘Ã¢y lÃ ": "đây là",
+        "dá»±a trÃªn": "dựa trên",
+        "cÄƒn cá»©": "căn cứ",
+        "Ä‘Æ°á»£c": "được",
+        "cung cáº¥p": "cung cấp",
+    }
+    repaired = value
+    for old, new in replacements.items():
+        repaired = repaired.replace(old, new)
+    return repaired
+
+
 def contains_khong_so(value: str) -> bool:
-    normalized = strip_accents(str(value)).casefold()
+    normalized = normalize_for_matching(str(value))
     return "khong so" in normalized
 
 
 def strip_accents(value: str) -> str:
-    decomposed = unicodedata.normalize("NFD", value)
+    normalized = str(value or "").replace("đ", "d").replace("Đ", "D")
+    decomposed = unicodedata.normalize("NFD", normalized)
     return "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
-
 
 def normalize_answer_spacing(value: str) -> str:
     patched = re.sub(r"[ \t]+", " ", value)
@@ -516,3 +607,9 @@ class PatchError(RuntimeError):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
