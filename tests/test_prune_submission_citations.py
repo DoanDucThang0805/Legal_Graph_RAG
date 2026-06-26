@@ -186,3 +186,82 @@ def test_zip_output_contains_only_root_results_json(tmp_path) -> None:
     assert exit_code == 0
     with ZipFile(zip_path) as archive:
         assert archive.namelist() == ["results.json"]
+
+
+def test_variant_d_caps() -> None:
+    module = load_prune_module()
+
+    assert module.caps_for_variant("d", "single_fact") == module.Caps(max_docs=2, max_articles=4)
+    assert module.caps_for_variant("d", "list_policy") == module.Caps(max_docs=4, max_articles=6)
+    assert module.caps_for_variant("d", "default") == module.Caps(max_docs=3, max_articles=5)
+
+
+
+def test_variant_e_caps() -> None:
+    module = load_prune_module()
+
+    assert module.caps_for_variant("e", "single_fact") == module.Caps(max_docs=2, max_articles=5)
+    assert module.caps_for_variant("e", "list_policy") == module.Caps(max_docs=4, max_articles=7)
+    assert module.caps_for_variant("e", "default") == module.Caps(max_docs=3, max_articles=6)
+
+
+
+def test_variant_f_caps() -> None:
+    module = load_prune_module()
+
+    assert module.caps_for_variant("f", "single_fact") == module.Caps(max_docs=2, max_articles=4)
+    assert module.caps_for_variant("f", "list_policy") == module.Caps(max_docs=4, max_articles=6)
+    assert module.caps_for_variant("f", "default") == module.Caps(max_docs=3, max_articles=5)
+
+
+
+def test_variant_d_keeps_more_articles_than_a() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    record = item("Câu hỏi mặc định?", "Theo Điều 1.", articles)
+
+    patched_a, _ = module.prune_record(record, variant="a")
+    patched_d, _ = module.prune_record(record, variant="d")
+
+    assert len(patched_a["relevant_articles"]) == 4
+    assert len(patched_d["relevant_articles"]) == 5
+
+
+
+def test_variant_e_keeps_more_articles_than_d() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 8)]
+    record = item("Câu hỏi mặc định?", "Theo Điều 1.", articles)
+
+    patched_d, _ = module.prune_record(record, variant="d")
+    patched_e, _ = module.prune_record(record, variant="e")
+
+    assert len(patched_d["relevant_articles"]) == 5
+    assert len(patched_e["relevant_articles"]) == 6
+
+
+
+def test_variant_f_keeps_answer_mentioned_articles_before_backfill() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 7)]
+    record = item("Câu hỏi mặc định?", "Căn cứ Điều 2 và Điều 4.", articles)
+
+    patched, _ = module.prune_record(record, variant="f")
+
+    assert len(patched["relevant_articles"]) == 5
+    assert articles[1] in patched["relevant_articles"]
+    assert articles[3] in patched["relevant_articles"]
+    assert patched["relevant_articles"] == [articles[0], articles[1], articles[2], articles[3], articles[4]]
+
+
+
+def test_existing_variants_a_b_c_still_work() -> None:
+    module = load_prune_module()
+    articles = [article("01/2020/QH14", "Luật A", f"Điều {i}") for i in range(1, 6)]
+    record = item("Câu hỏi mặc định?", "Theo Điều 1.", articles)
+
+    for variant in ("a", "b", "c"):
+        patched, change = module.prune_record(record, variant=variant)
+        assert patched["relevant_articles"]
+        assert patched["relevant_docs"]
+        assert change["rolled_back"] is False

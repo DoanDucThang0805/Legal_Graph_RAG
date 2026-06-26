@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", required=True)
     parser.add_argument("--changes", required=True)
     parser.add_argument("--zip-output", default=None)
-    parser.add_argument("--variant", choices=("a", "b", "c"), required=True)
+    parser.add_argument("--variant", choices=("a", "b", "c", "d", "e", "f"), required=True)
     return parser
 
 
@@ -156,6 +156,9 @@ def prune_submission(items: list[dict[str, Any]], *, variant: str) -> tuple[list
         "docs_gt_5_after": docs_gt_5_after,
         "articles_gt_5_before": articles_gt_5_before,
         "articles_gt_5_after": articles_gt_5_after,
+        "variant": variant,
+        "docs_caps": docs_caps_for_report(variant),
+        "articles_caps": articles_caps_for_report(variant),
     }
     validate_items(output)
     return output, report, changes
@@ -239,11 +242,28 @@ def select_articles(scored: list[ScoredArticle], *, caps: Caps, variant: str, an
         if not ranked:
             ranked = sorted(scored, key=lambda entry: (-entry.score, entry.index))
         selected_indexes = {entry.index for entry in ranked[: caps.max_articles]}
+    elif variant == "f":
+        selected_indexes = select_variant_f_indexes(scored, caps=caps, answer=answer)
     else:
         ranked = sorted(scored, key=lambda entry: (-entry.score, entry.index))
         selected_indexes = {entry.index for entry in ranked[: caps.max_articles]}
     return [entry for entry in scored if entry.index in selected_indexes]
 
+
+def select_variant_f_indexes(scored: list[ScoredArticle], *, caps: Caps, answer: str) -> set[int]:
+    answer_mentioned = [entry for entry in scored if article_explicitly_mentioned(entry.ref, answer)]
+    ranked_mentioned = sorted(answer_mentioned, key=lambda entry: (-mention_strength(entry.ref, answer), -entry.score, entry.index))
+    selected: list[ScoredArticle] = ranked_mentioned[: caps.max_articles]
+    selected_indexes = {entry.index for entry in selected}
+
+    if len(selected) < caps.max_articles:
+        backfill = [entry for entry in sorted(scored, key=lambda entry: (-entry.score, entry.index)) if entry.index not in selected_indexes]
+        for entry in backfill:
+            selected.append(entry)
+            selected_indexes.add(entry.index)
+            if len(selected) >= caps.max_articles:
+                break
+    return selected_indexes
 
 def parse_article_ref(value: str) -> ArticleRef | None:
     parts = [part.strip() for part in str(value or "").split("|", maxsplit=2)]
@@ -284,20 +304,42 @@ def determine_question_type(question: str) -> str:
     return "default"
 
 def caps_for_variant(variant: str, question_type: str) -> Caps:
+    table = caps_table_for_variant(variant)
+    return table[question_type]
+
+
+def caps_table_for_variant(variant: str) -> dict[str, Caps]:
     if variant == "b":
-        table = {
+        return {
             "single_fact": Caps(max_docs=1, max_articles=2),
             "list_policy": Caps(max_docs=3, max_articles=4),
             "default": Caps(max_docs=2, max_articles=3),
         }
-        return table[question_type]
-    table = {
+    if variant == "d" or variant == "f":
+        return {
+            "single_fact": Caps(max_docs=2, max_articles=4),
+            "list_policy": Caps(max_docs=4, max_articles=6),
+            "default": Caps(max_docs=3, max_articles=5),
+        }
+    if variant == "e":
+        return {
+            "single_fact": Caps(max_docs=2, max_articles=5),
+            "list_policy": Caps(max_docs=4, max_articles=7),
+            "default": Caps(max_docs=3, max_articles=6),
+        }
+    return {
         "single_fact": Caps(max_docs=2, max_articles=3),
         "list_policy": Caps(max_docs=4, max_articles=5),
         "default": Caps(max_docs=3, max_articles=4),
     }
-    return table[question_type]
 
+
+def docs_caps_for_report(variant: str) -> dict[str, int]:
+    return {question_type: caps.max_docs for question_type, caps in caps_table_for_variant(variant).items()}
+
+
+def articles_caps_for_report(variant: str) -> dict[str, int]:
+    return {question_type: caps.max_articles for question_type, caps in caps_table_for_variant(variant).items()}
 
 def is_local_document(ref: ArticleRef) -> bool:
     haystack = normalize_for_matching(f"{ref.law_id} {ref.law_title}")
@@ -316,8 +358,20 @@ def old_law_penalty_applies(ref: ArticleRef, laws_present: set[str], answer: str
 
 
 def article_explicitly_mentioned(ref: ArticleRef, answer: str) -> bool:
-    folded = answer.casefold()
-    return ref.law_id.casefold() in folded or ref.article_no.casefold() in folded
+    return mention_strength(ref, answer) > 0
+
+
+def mention_strength(ref: ArticleRef, answer: str) -> int:
+    folded = normalize_for_matching(answer)
+    law_in_answer = normalize_for_matching(ref.law_id) in folded
+    article_in_answer = normalize_for_matching(ref.article_no) in folded
+    if law_in_answer and article_in_answer:
+        return 3
+    if law_in_answer:
+        return 2
+    if article_in_answer:
+        return 1
+    return 0
 
 
 def normalize_for_matching(value: str) -> str:
@@ -453,5 +507,11 @@ def write_flat_zip(results_path: str | Path, zip_path: str | Path) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
 
 
