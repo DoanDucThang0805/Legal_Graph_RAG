@@ -4177,6 +4177,707 @@ python scripts/debug_retrieval_for_question.py --id 1
 ```
 
 ---
+## U4 — Precision-Oriented Citation Pruning
+
+### 1. Mục tiêu
+
+Điểm hiện tại cho thấy hệ thống đang bị **precision thấp**, trong khi recall không quá thấp:
+
+```json
+{
+  "ARTICLES_F2MACRO": 0.3594,
+  "DOCS_F2MACRO": 0.4496,
+  "ARTICLES_PRECISION": 0.1544,
+  "ARTICLES_RECALL": 0.5973,
+  "DOCS_PRECISION": 0.2051,
+  "DOCS_RECALL": 0.71
+}
+```
+
+Nhận định:
+
+* Hệ thống đang trả về quá nhiều `relevant_docs` và `relevant_articles`.
+* Recall tương đối ổn, nhưng precision thấp do nhiều citation nhiễu.
+* Cần tối ưu theo hướng **giảm số căn cứ trả về**, ưu tiên căn cứ thực sự được dùng trong answer.
+
+Mục tiêu của U4:
+
+```text
+Tăng ARTICLES_PRECISION và DOCS_PRECISION.
+Giữ ARTICLES_RECALL và DOCS_RECALL không giảm quá mạnh.
+Không sửa file final hiện tại.
+Không gọi LLM/retrieval/index.
+Chỉ post-process deterministic trên submission JSON.
+```
+
+---
+
+### 2. File đầu vào và nguyên tắc an toàn
+
+File đầu vào hiện tại:
+
+```text
+data/outputs/results_patched_final.json
+```
+
+Không ghi đè các file sau:
+
+```text
+data/outputs/results_patched_final.json
+data/outputs/submission_final.zip
+final_submission/submission.zip
+```
+
+Toàn bộ output U4 ghi vào:
+
+```text
+data/outputs/precision_pruning/
+```
+
+Các file output dự kiến:
+
+```text
+data/outputs/precision_pruning/results_pruned_a.json
+data/outputs/precision_pruning/results_pruned_b.json
+data/outputs/precision_pruning/results_pruned_c.json
+
+data/outputs/precision_pruning/submission_pruned_a.zip
+data/outputs/precision_pruning/submission_pruned_b.zip
+data/outputs/precision_pruning/submission_pruned_c.zip
+
+data/outputs/precision_pruning/prune_report_a.json
+data/outputs/precision_pruning/prune_report_b.json
+data/outputs/precision_pruning/prune_report_c.json
+
+data/outputs/precision_pruning/prune_changes_a.jsonl
+data/outputs/precision_pruning/prune_changes_b.jsonl
+data/outputs/precision_pruning/prune_changes_c.jsonl
+```
+
+---
+
+### 3. U4.1 — Audit precision-risk
+
+#### 3.1. Script cần tạo
+
+```text
+scripts/audit_submission_precision.py
+```
+
+#### 3.2. Input
+
+```text
+--input data/outputs/results_patched_final.json
+--output-dir data/outputs/precision_pruning
+```
+
+#### 3.3. Output
+
+```text
+data/outputs/precision_pruning/audit_precision_summary.json
+data/outputs/precision_pruning/audit_precision_by_record.csv
+data/outputs/precision_pruning/top_risky_precision_records.csv
+```
+
+#### 3.4. Chỉ số cần audit
+
+Với mỗi record cần tính:
+
+```text
+docs_count
+articles_count
+docs_gt_3
+articles_gt_4
+docs_gt_5
+articles_gt_5
+local_docs_count
+answer_legal_basis_lines_count
+articles_mentioned_in_answer_count
+articles_not_mentioned_in_answer_count
+tax_law_2006_2019_conflict
+bidding_law_2013_2023_conflict
+sme_decree_2018_2021_conflict
+labor_penalty_2013_2022_conflict
+```
+
+Trong đó:
+
+```text
+local_docs_count = số lượng văn bản loại NQ-HĐND hoặc QĐ-UBND
+```
+
+Các conflict group:
+
+```text
+78/2006/QH11  vs 38/2019/QH14
+43/2013/QH13  vs 22/2023/QH15
+39/2018/NĐ-CP vs 80/2021/NĐ-CP
+95/2013/NĐ-CP vs 12/2022/NĐ-CP
+```
+
+#### 3.5. Command chạy audit
+
+```bash
+cd /media/data/minhht/aiguru_ltran/Legal_Graph_RAG
+
+mkdir -p data/outputs/precision_pruning
+
+python scripts/audit_submission_precision.py \
+  --input data/outputs/results_patched_final.json \
+  --output-dir data/outputs/precision_pruning
+```
+
+---
+
+### 4. U4.2 — Deterministic citation pruning
+
+#### 4.1. Script cần tạo
+
+```text
+scripts/prune_submission_citations.py
+```
+
+#### 4.2. Input arguments
+
+```text
+--input
+--output
+--report
+--changes
+--zip-output
+--variant {a,b,c}
+```
+
+Ví dụ:
+
+```bash
+python scripts/prune_submission_citations.py \
+  --input data/outputs/results_patched_final.json \
+  --output data/outputs/precision_pruning/results_pruned_a.json \
+  --report data/outputs/precision_pruning/prune_report_a.json \
+  --changes data/outputs/precision_pruning/prune_changes_a.jsonl \
+  --zip-output data/outputs/precision_pruning/submission_pruned_a.zip \
+  --variant a
+```
+
+#### 4.3. Nguyên tắc pruning
+
+Giữ nguyên:
+
+```text
+id
+question
+answer
+record order
+total record count
+```
+
+Chỉ prune:
+
+```text
+relevant_docs
+relevant_articles
+```
+
+Không được để rỗng:
+
+```text
+len(relevant_docs) >= 1
+len(relevant_articles) >= 1
+```
+
+Nếu pruning làm rỗng citation thì rollback record đó và ghi warning.
+
+---
+
+### 5. Logic prune chi tiết
+
+#### Rule 1 — Deduplicate
+
+Deduplicate `relevant_docs` và `relevant_articles` nhưng giữ nguyên thứ tự ban đầu.
+
+---
+
+#### Rule 2 — Rebuild docs từ articles
+
+Sau khi prune `relevant_articles`, rebuild lại `relevant_docs` từ các article còn lại.
+
+Ví dụ:
+
+```text
+38/2019/QH14|Luật 38/2019/QH14 Luật Quản lý thuế số|Điều 59
+```
+
+thì doc tương ứng là:
+
+```text
+38/2019/QH14|Luật 38/2019/QH14 Luật Quản lý thuế số
+```
+
+Không giữ `relevant_docs` không còn article tương ứng.
+
+---
+
+#### Rule 3 — Ưu tiên article được nhắc trong answer
+
+Tính điểm cao cho article nếu:
+
+```text
+law_id xuất hiện trong answer
+article_no xuất hiện trong answer
+cả law_id và article_no cùng xuất hiện trong answer
+```
+
+Gợi ý scoring:
+
+```text
++100 nếu law_id xuất hiện trong answer
++80 nếu article_no xuất hiện trong answer
++60 nếu cả law_id và article_no xuất hiện trong answer
++30 nếu law_id xuất hiện trong question
++20 nếu law title keyword overlap với question/answer
+```
+
+---
+
+#### Rule 4 — Hạn chế văn bản địa phương
+
+Hạ điểm hoặc loại:
+
+```text
+NQ-HĐND
+QĐ-UBND
+```
+
+nếu question không có địa danh/tỉnh/thành hoặc indicator địa phương.
+
+Gợi ý scoring:
+
+```text
+-40 cho NQ-HĐND hoặc QĐ-UBND nếu question không có province/city/local indicator
+```
+
+Chỉ giữ văn bản địa phương khi:
+
+```text
+question có tên tỉnh/thành
+hoặc answer trực tiếp nhắc văn bản đó
+```
+
+---
+
+#### Rule 5 — Ưu tiên văn bản mới hơn khi conflict
+
+Conflict groups:
+
+```text
+["78/2006/QH11", "38/2019/QH14"]
+["43/2013/QH13", "22/2023/QH15"]
+["39/2018/NĐ-CP", "80/2021/NĐ-CP"]
+["95/2013/NĐ-CP", "12/2022/NĐ-CP"]
+```
+
+Rule:
+
+```text
+Nếu cả văn bản cũ và mới cùng xuất hiện:
+- Ưu tiên giữ văn bản mới.
+- Chỉ giữ văn bản cũ nếu answer trực tiếp nhắc văn bản cũ.
+```
+
+Gợi ý scoring:
+
+```text
+-50 cho old law nếu newer law cùng conflict group xuất hiện và old law không được nhắc trong answer
+```
+
+---
+
+#### Rule 6 — Cap citation theo loại câu hỏi
+
+##### 6.1. single_fact
+
+Dấu hiệu:
+
+```text
+bao lâu
+mấy ngày
+tỷ lệ
+mức phạt
+thời hạn
+điều kiện gì
+ai bị xử phạt
+```
+
+Cap variant A:
+
+```text
+max_docs = 2
+max_articles = 3
+```
+
+Cap variant B:
+
+```text
+max_docs = 1
+max_articles = 2
+```
+
+Cap variant C:
+
+```text
+same as variant A
+```
+
+---
+
+##### 6.2. list_policy
+
+Dấu hiệu:
+
+```text
+những gì
+những nội dung gì
+những chính sách nào
+bao gồm
+các trường hợp
+```
+
+Cap variant A:
+
+```text
+max_docs = 4
+max_articles = 5
+```
+
+Cap variant B:
+
+```text
+max_docs = 3
+max_articles = 4
+```
+
+Cap variant C:
+
+```text
+same as variant A
+```
+
+---
+
+##### 6.3. default
+
+Cap variant A:
+
+```text
+max_docs = 3
+max_articles = 4
+```
+
+Cap variant B:
+
+```text
+max_docs = 2
+max_articles = 3
+```
+
+Cap variant C:
+
+```text
+same as variant A
+```
+
+---
+
+# 6. Ba biến thể pruning
+
+## Variant A — Balanced
+
+Mục tiêu: tăng precision nhưng hạn chế mất recall.
+
+```text
+single_fact: max_docs=2, max_articles=3
+list_policy: max_docs=4, max_articles=5
+default: max_docs=3, max_articles=4
+```
+
+Output:
+
+```text
+results_pruned_a.json
+submission_pruned_a.zip
+```
+
+Ưu tiên submit thử đầu tiên.
+
+---
+
+## Variant B — Aggressive precision
+
+Mục tiêu: tăng precision mạnh hơn, chấp nhận recall giảm.
+
+```text
+single_fact: max_docs=1, max_articles=2
+list_policy: max_docs=3, max_articles=4
+default: max_docs=2, max_articles=3
+```
+
+Output:
+
+```text
+results_pruned_b.json
+submission_pruned_b.zip
+```
+
+Chỉ submit nếu A vẫn precision thấp.
+
+---
+
+## Variant C — Answer-evidence only
+
+Mục tiêu: chỉ giữ citation được answer thật sự dùng.
+
+Logic:
+
+```text
+Ưu tiên giữ articles được nhắc trong answer.
+Nếu không còn article nào, backfill từ highest scoring original articles.
+Caps giống Variant A.
+```
+
+Output:
+
+```text
+results_pruned_c.json
+submission_pruned_c.zip
+```
+
+Submit sau A nếu cần.
+
+---
+
+# 7. U4.3 — Validate submission JSON
+
+## 7.1. Script cần tạo
+
+```text
+scripts/validate_submission_json.py
+```
+
+## 7.2. Input
+
+```text
+--input data/outputs/precision_pruning/results_pruned_a.json
+```
+
+## 7.3. Kiểm tra cần có
+
+```text
+records
+unique_ids
+empty_answer
+empty_docs
+empty_articles
+khong_so_refs_records
+disclaimer_records
+internal_leakage_records
+schema ok
+```
+
+Exit non-zero nếu lỗi schema fatal.
+
+Expected output:
+
+```text
+records: 2000
+unique_ids: 2000
+empty_answer: 0
+empty_docs: 0
+empty_articles: 0
+khong_so_refs_records: 0
+disclaimer_records: 0
+internal_leakage_records: 0
+schema ok
+```
+
+---
+
+# 8. Tests
+
+## File test cần tạo
+
+```text
+tests/test_prune_submission_citations.py
+```
+
+## Test cases cần có
+
+```text
+test_parse_article_ref
+test_deduplicate_preserve_order
+test_rebuild_docs_from_articles
+test_local_document_penalty
+test_old_new_conflict_penalty
+test_question_type_single_fact
+test_question_type_list_policy
+test_variant_a_caps
+test_variant_b_caps
+test_variant_c_answer_evidence
+test_rollback_when_empty_refs
+test_zip_contains_single_results_json
+```
+
+Chạy test:
+
+```bash
+pytest -q tests/test_prune_submission_citations.py
+```
+
+---
+
+# 10. Commands chạy sau khi Codex implement
+
+## 10.1. Chạy test
+
+```bash
+cd /media/data/minhht/aiguru_ltran/Legal_Graph_RAG
+
+pytest -q tests/test_prune_submission_citations.py
+```
+
+---
+
+## 10.2. Chạy audit
+
+```bash
+mkdir -p data/outputs/precision_pruning
+
+python scripts/audit_submission_precision.py \
+  --input data/outputs/results_patched_final.json \
+  --output-dir data/outputs/precision_pruning
+```
+
+---
+
+## 10.3. Chạy Variant A
+
+```bash
+python scripts/prune_submission_citations.py \
+  --input data/outputs/results_patched_final.json \
+  --output data/outputs/precision_pruning/results_pruned_a.json \
+  --report data/outputs/precision_pruning/prune_report_a.json \
+  --changes data/outputs/precision_pruning/prune_changes_a.jsonl \
+  --zip-output data/outputs/precision_pruning/submission_pruned_a.zip \
+  --variant a
+
+python scripts/validate_submission_json.py \
+  --input data/outputs/precision_pruning/results_pruned_a.json
+
+unzip -l data/outputs/precision_pruning/submission_pruned_a.zip
+```
+
+---
+
+## 10.4. Chạy Variant B
+
+```bash
+python scripts/prune_submission_citations.py \
+  --input data/outputs/results_patched_final.json \
+  --output data/outputs/precision_pruning/results_pruned_b.json \
+  --report data/outputs/precision_pruning/prune_report_b.json \
+  --changes data/outputs/precision_pruning/prune_changes_b.jsonl \
+  --zip-output data/outputs/precision_pruning/submission_pruned_b.zip \
+  --variant b
+
+python scripts/validate_submission_json.py \
+  --input data/outputs/precision_pruning/results_pruned_b.json
+
+unzip -l data/outputs/precision_pruning/submission_pruned_b.zip
+```
+
+---
+
+## 10.5. Chạy Variant C
+
+```bash
+python scripts/prune_submission_citations.py \
+  --input data/outputs/results_patched_final.json \
+  --output data/outputs/precision_pruning/results_pruned_c.json \
+  --report data/outputs/precision_pruning/prune_report_c.json \
+  --changes data/outputs/precision_pruning/prune_changes_c.jsonl \
+  --zip-output data/outputs/precision_pruning/submission_pruned_c.zip \
+  --variant c
+
+python scripts/validate_submission_json.py \
+  --input data/outputs/precision_pruning/results_pruned_c.json
+
+unzip -l data/outputs/precision_pruning/submission_pruned_c.zip
+```
+
+---
+
+# 11. Thứ tự submit thử
+
+Nếu hệ thống giới hạn lượt submit, ưu tiên:
+
+```text
+1. data/outputs/precision_pruning/submission_pruned_a.zip
+2. data/outputs/precision_pruning/submission_pruned_c.zip
+3. data/outputs/precision_pruning/submission_pruned_b.zip
+```
+
+Không submit Variant B đầu tiên vì aggressive quá, có thể làm recall giảm mạnh.
+
+---
+
+# 12. Kỳ vọng điểm sau pruning
+
+Hiện tại:
+
+```text
+ARTICLES_PRECISION = 0.1544
+ARTICLES_RECALL    = 0.5973
+DOCS_PRECISION     = 0.2051
+DOCS_RECALL        = 0.7100
+```
+
+Kỳ vọng Variant A:
+
+```text
+ARTICLES_PRECISION: 0.1544 -> 0.30 đến 0.45
+DOCS_PRECISION:     0.2051 -> 0.35 đến 0.55
+ARTICLES_RECALL:    giảm nhẹ hoặc vừa
+DOCS_RECALL:        giảm nhẹ hoặc vừa
+```
+
+Nếu Variant A tăng precision nhưng F2 giảm ít hoặc tăng, lấy A làm baseline mới.
+
+Nếu A chưa đủ precision, thử Variant C.
+
+Nếu C vẫn thấp, thử Variant B.
+
+---
+
+# 13. Kết luận
+
+U4 không nhằm cải thiện answer generation mà nhằm cải thiện **citation precision**.
+
+Chiến lược chính:
+
+```text
+Ít căn cứ hơn.
+Đúng căn cứ hơn.
+Chỉ giữ căn cứ answer thật sự dùng.
+Loại văn bản nhiễu, văn bản địa phương không cần thiết, văn bản cũ khi có văn bản mới.
+```
+
+Output chính cần quan tâm đầu tiên:
+
+```text
+data/outputs/precision_pruning/submission_pruned_a.zip
+```
+
+---
 
 # Definition of Done chung
 
