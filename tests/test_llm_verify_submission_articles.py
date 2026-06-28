@@ -150,3 +150,63 @@ def test_report_field_creation() -> None:
     assert report["total_records"] == 1
     assert report["mode"] == "balanced"
     assert "domain_summary" in report
+
+
+def test_disable_thinking_adds_chat_template_kwargs(monkeypatch: Any) -> None:
+    module = load_module()
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"{\\"ok\\": true}"}}]}'
+
+    def fake_urlopen(request: Any, timeout: float) -> FakeResponse:
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    content = module.call_openai_compatible("http://localhost:8000/v1", "qwen3-14b", [{"role": "user", "content": "hi"}], 0, 120, disable_thinking=True)
+
+    assert json.loads(content) == {"ok": True}
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["timeout"] == 120
+
+
+def test_disable_thinking_not_set_by_default(monkeypatch: Any) -> None:
+    module = load_module()
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"{\\"ok\\": true}"}}]}'
+
+    def fake_urlopen(request: Any, timeout: float) -> FakeResponse:
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    module.call_openai_compatible("http://localhost:8000/v1", "qwen3-14b", [{"role": "user", "content": "hi"}], 0, 120)
+
+    assert "chat_template_kwargs" not in captured["body"]
+
+
+def test_parse_json_after_think_block() -> None:
+    module = load_module()
+    parsed = module.parse_llm_json('<think>reasoning that must be ignored</think>{"selected": [], "rejected": []}')
+
+    assert parsed == {"selected": [], "rejected": []}

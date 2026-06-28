@@ -86,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-article-chars", type=int, default=1200)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--disable-thinking", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--start-id", type=int, default=None)
     parser.add_argument("--end-id", type=int, default=None)
@@ -111,7 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         article_lookup=article_lookup,
         prompt_template=prompt_template,
         options=vars(args),
-        llm_client=lambda messages: call_openai_compatible(args.base_url, args.model, messages, args.temperature, args.timeout),
+        llm_client=lambda messages: call_openai_compatible(args.base_url, args.model, messages, args.temperature, args.timeout, disable_thinking=args.disable_thinking),
     )
     write_json(args.output, output_records)
     write_json(args.report, report)
@@ -262,6 +263,7 @@ def cap_for_mode(mode: str, question_type: str) -> int:
     }[mode][question_type]
 
 def parse_llm_json(text: str) -> dict[str, Any]:
+    text = strip_think_blocks(text)
     attempts = [text, strip_markdown_fences(text)]
     first, last = text.find("{"), text.rfind("}")
     if first >= 0 and last > first:
@@ -276,6 +278,9 @@ def parse_llm_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError as exc:
             last_error = exc
     raise ValueError(f"could not parse LLM JSON: {last_error}")
+
+def strip_think_blocks(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
 
 def strip_markdown_fences(text: str) -> str:
     stripped = text.strip()
@@ -332,9 +337,12 @@ def format_user_prompt(question: str, candidates: list[Candidate]) -> str:
         blocks.extend(["", f"[{candidate.candidate_id}]", f"article_ref: {candidate.ref.raw}", f"law_id: {candidate.ref.law_id}", f"law_title: {candidate.ref.law_title}", f"article_no: {candidate.ref.article_no}", "article_text:", text])
     return "\n".join(blocks)
 
-def call_openai_compatible(base_url: str, model: str, messages: list[dict[str, str]], temperature: float, timeout: float) -> str:
+def call_openai_compatible(base_url: str, model: str, messages: list[dict[str, str]], temperature: float, timeout: float, *, disable_thinking: bool = False) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
-    payload = json.dumps({"model": model, "messages": messages, "temperature": temperature}).encode("utf-8")
+    request_body: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+    if disable_thinking:
+        request_body["chat_template_kwargs"] = {"enable_thinking": False}
+    payload = json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -584,4 +592,7 @@ def write_flat_zip(path: str | Path, records: list[dict[str, Any]]) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
 

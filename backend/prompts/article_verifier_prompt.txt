@@ -57,10 +57,7 @@ Rules:
 - Do not explain outside JSON.
 - Do not wrap JSON in markdown.
 
-IMPORTANT FOR QWEN3:
-/no_think
-Do not output reasoning.
-Do not output chain-of-thought.
+QWEN3:
+If thinking mode is enabled, do not output reasoning.
 Do not output <think> tags.
-Return STRICT JSON only.
-The first character of your response must be "{" and the last character must be "}".
+Return strict JSON only.
