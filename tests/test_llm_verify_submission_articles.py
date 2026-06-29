@@ -28,7 +28,7 @@ def record(articles: list[str], record_id: int = 1, question: str = "Nộp thu�
 
 
 def options(mode: str = "balanced") -> dict[str, Any]:
-    return {"mode": mode, "max_candidates": 12, "max_article_chars": 1200, "limit": None, "start_id": None, "end_id": None, "only_possible_overpruned": False, "priority_domains": "", "sleep_seconds": 0}
+    return {"mode": mode, "max_candidates": 12, "max_article_chars": 1200, "limit": None, "start_id": None, "end_id": None, "resume_from_changes": None, "write_incremental": False, "checkpoint_every": 0, "progress_every": 10, "max_retries": 2, "retry_sleep_seconds": 0, "health_check_before_call": False, "merge_changes": False, "only_possible_overpruned": False, "priority_domains": "", "sleep_seconds": 0, "changes": "changes.jsonl", "output": "output.json", "report": "report.json", "zip_output": None, "disable_thinking": False}
 
 
 def test_parse_article_ref() -> None:
@@ -210,3 +210,165 @@ def test_parse_json_after_think_block() -> None:
     parsed = module.parse_llm_json('<think>reasoning that must be ignored</think>{"selected": [], "rejected": []}')
 
     assert parsed == {"selected": [], "rejected": []}
+
+
+
+def verify_sample(module: Any, records: list[dict[str, Any]], fallback_records: list[dict[str, Any]], opts: dict[str, Any], llm_client: Any, resume: dict[int, dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    lookup = module.build_article_text_lookup([
+        {"law_id": "01/2020/QH14", "law_title": "Luật A", "article_no": "Điều 1", "article_text": "A"},
+        {"law_id": "02/2020/QH14", "law_title": "Luật B", "article_no": "Điều 2", "article_text": "B"},
+        {"law_id": "03/2020/QH14", "law_title": "Luật C", "article_no": "Điều 3", "article_text": "C"},
+    ])
+    return module.verify_submission(
+        input_records=records,
+        fallback_by_id={row["id"]: row for row in fallback_records},
+        audit_by_id={},
+        article_lookup=lookup,
+        prompt_template="prompt",
+        options=opts,
+        resume_success_by_id=resume or {},
+        llm_client=llm_client,
+        health_check=None,
+    )
+
+
+def test_start_end_id_processes_only_chunk_but_outputs_all_records() -> None:
+    module = load_module()
+    articles = [article("01/2020/QH14", "Luật A", "Điều 1"), article("02/2020/QH14", "Luật B", "Điều 2")]
+    records = [record(articles, record_id=i) for i in range(1, 4)]
+    fallbacks = [record([articles[0]], record_id=i) for i in range(1, 4)]
+    opts = options(); opts.update({"start_id": 2, "end_id": 2})
+    calls = {"count": 0}
+
+    def llm(_messages: Any) -> str:
+        calls["count"] += 1
+        return '{"selected": [{"candidate_id": 2, "label": "direct_relevant", "confidence": 0.9}], "rejected": []}'
+
+    output, report, changes = verify_sample(module, records, fallbacks, opts, llm)
+
+    assert len(output) == 3
+    assert calls["count"] == 1
+    assert output[1]["relevant_articles"] == [articles[1]]
+    assert output[0]["relevant_articles"] == [articles[0]]
+    assert report["processed_in_chunk_count"] == 1
+    assert len(changes) == 1
+
+
+def test_write_incremental_writes_one_line_per_processed_record(tmp_path: Path) -> None:
+    module = load_module()
+    articles = [article("01/2020/QH14", "Luật A", "Điều 1")]
+    records = [record(articles, record_id=1), record(articles, record_id=2)]
+    opts = options(); opts.update({"write_incremental": True, "changes": str(tmp_path / "changes.jsonl")})
+    verify_sample(module, records, records, opts, lambda _messages: '{"selected": [{"candidate_id": 1, "label": "direct_relevant", "confidence": 0.9}], "rejected": []}')
+
+    lines = (tmp_path / "changes.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert all(json.loads(line)["after_docs"] for line in lines)
+
+
+def test_resume_from_changes_skips_successful_records() -> None:
+    module = load_module()
+    a1 = article("01/2020/QH14", "Luật A", "Điều 1")
+    a2 = article("02/2020/QH14", "Luật B", "Điều 2")
+    records = [record([a1, a2], record_id=1)]
+    resume = {1: {"id": 1, "llm_success": True, "fallback_used": False, "after_articles": [a2], "after_docs": ["02/2020/QH14|Luật B"]}}
+    calls = {"count": 0}
+    output, report, changes = verify_sample(module, records, [record([a1], record_id=1)], options(), lambda _messages: calls.__setitem__("count", calls["count"] + 1) or "{}", resume)
+
+    assert calls["count"] == 0
+    assert output[0]["relevant_articles"] == [a2]
+    assert report["resumed_success_count"] == 1
+    assert changes == []
+
+
+def test_merge_changes_uses_latest_successful_entry(tmp_path: Path) -> None:
+    module = load_module()
+    a1 = article("01/2020/QH14", "Luật A", "Điều 1")
+    a2 = article("02/2020/QH14", "Luật B", "Điều 2")
+    path = tmp_path / "changes.jsonl"
+    path.write_text("\n".join([
+        json.dumps({"id": 1, "llm_success": True, "fallback_used": False, "after_articles": [a1], "after_docs": ["01/2020/QH14|Luật A"]}),
+        json.dumps({"id": 1, "llm_success": True, "fallback_used": False, "after_articles": [a2], "after_docs": ["02/2020/QH14|Luật B"]}),
+    ]), encoding="utf-8")
+
+    loaded = module.load_resume_success_changes(path)
+
+    assert loaded[1]["after_articles"] == [a2]
+
+
+def test_merge_changes_outputs_all_records() -> None:
+    module = load_module()
+    a1 = article("01/2020/QH14", "Luật A", "Điều 1")
+    a2 = article("02/2020/QH14", "Luật B", "Điều 2")
+    records = [record([a1, a2], record_id=1), record([a1, a2], record_id=2)]
+    fallback = [record([a1], record_id=1), record([a1], record_id=2)]
+    resume = {2: {"id": 2, "llm_success": True, "fallback_used": False, "after_articles": [a2], "after_docs": ["02/2020/QH14|Luật B"]}}
+
+    output, report, _changes = module.merge_changes_output(input_records=records, fallback_by_id={row["id"]: row for row in fallback}, resume_success_by_id=resume, options=options())
+
+    assert len(output) == 2
+    assert output[0]["relevant_articles"] == [a1]
+    assert output[1]["relevant_articles"] == [a2]
+    assert report["merge_only"] is True
+
+
+def test_retry_on_connection_refused() -> None:
+    module = load_module()
+    opts = options(); opts.update({"max_retries": 2, "retry_sleep_seconds": 0})
+    attempts = {"count": 0}
+    counters = module.Counter()
+    state = {"retries": 0}
+
+    def flaky(_messages: Any) -> str:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("Connection refused")
+        return "ok"
+
+    client = module.build_retrying_client(1, flaky, None, opts, counters, state)
+
+    assert client([]) == "ok"
+    assert attempts["count"] == 2
+    assert state["retries"] == 1
+
+
+def test_no_retry_on_404_model_not_found() -> None:
+    module = load_module()
+    opts = options(); opts.update({"max_retries": 2, "retry_sleep_seconds": 0})
+    attempts = {"count": 0}
+
+    def fail(_messages: Any) -> str:
+        attempts["count"] += 1
+        raise RuntimeError("HTTP Error 404 model not found")
+
+    client = module.build_retrying_client(1, fail, None, opts, module.Counter(), {"retries": 0})
+
+    try:
+        client([])
+    except module.RequestFailure:
+        pass
+    assert attempts["count"] == 1
+
+
+def test_progress_logging_prints_current_id(capsys: Any) -> None:
+    module = load_module()
+    articles = [article("01/2020/QH14", "Luật A", "Điều 1")]
+    opts = options(); opts.update({"progress_every": 1})
+    verify_sample(module, [record(articles, record_id=7)], [record(articles, record_id=7)], opts, lambda _messages: '{"selected": [{"candidate_id": 1, "label": "direct_relevant", "confidence": 0.9}], "rejected": []}')
+
+    captured = capsys.readouterr().out
+    assert "[START]" in captured
+    assert "[RECORD] id=7" in captured
+    assert "[PROGRESS]" in captured
+    assert "[DONE]" in captured
+
+
+def test_report_contains_progress_resume_retry_fields() -> None:
+    module = load_module()
+    base = record([article("01/2020/QH14", "Luật A", "Điều 1")])
+    opts = options(); opts.update({"progress_every": 1, "write_incremental": True, "checkpoint_every": 5})
+    report = module.build_report([base], [base], [], module.Counter({"retry_count": 2, "request_failure_count": 1, "resumed_success_count": 1}), module.Counter(), module.Counter(), module.Counter(), module.Counter(), {}, opts, start_time=0.0, attempted_llm_count=3)
+
+    for field in ("chunk_start_id", "chunk_end_id", "processed_in_chunk_count", "resumed_success_count", "attempted_llm_count", "request_failure_count", "retry_count", "merge_only", "progress_every", "write_incremental", "checkpoint_every", "incremental_changes_path", "partial_output_path", "partial_report_path", "elapsed_sec", "avg_sec_per_record"):
+        assert field in report
+

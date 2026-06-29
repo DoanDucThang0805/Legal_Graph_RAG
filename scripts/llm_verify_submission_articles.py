@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import time
 import unicodedata
@@ -69,6 +70,9 @@ class Decision:
     confidence: float
     reason: str
 
+class RequestFailure(RuntimeError):
+    """Raised after transient request retries are exhausted."""
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify submission articles with a local OpenAI-compatible LLM.")
     parser.add_argument("--input", required=True)
@@ -90,6 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--start-id", type=int, default=None)
     parser.add_argument("--end-id", type=int, default=None)
+    parser.add_argument("--resume-from-changes", default=None)
+    parser.add_argument("--write-incremental", action="store_true")
+    parser.add_argument("--checkpoint-every", type=int, default=0)
+    parser.add_argument("--progress-every", type=int, default=10)
+    parser.add_argument("--max-retries", type=int, default=2)
+    parser.add_argument("--retry-sleep-seconds", type=float, default=10.0)
+    parser.add_argument("--health-check-before-call", action="store_true")
+    parser.add_argument("--merge-changes", action="store_true")
     parser.add_argument("--only-possible-overpruned", action="store_true")
     parser.add_argument("--priority-domains", default="")
     parser.add_argument("--resume", action="store_true")
@@ -103,6 +115,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     fallback_records = load_submission(args.fallback_pruned)
     fallback_by_id = {record["id"]: record for record in fallback_records}
     audit_by_id = load_audit_by_record(args.audit_by_record)
+    resume_success_by_id = load_resume_success_changes(args.resume_from_changes) if args.resume_from_changes else {}
+
+    if args.merge_changes:
+        output_records, report, changes = merge_changes_output(
+            input_records=input_records,
+            fallback_by_id=fallback_by_id,
+            resume_success_by_id=resume_success_by_id,
+            options=vars(args),
+        )
+        write_json(args.output, output_records)
+        write_json(args.report, report)
+        write_jsonl(args.changes, changes)
+        if args.zip_output:
+            write_flat_zip(args.zip_output, output_records)
+        print(f"[MERGE] loaded_successful_changes={len(resume_success_by_id)}", flush=True)
+        print(f"[MERGE] wrote_output={args.output}", flush=True)
+        return 0
+
     article_lookup = load_article_text_lookup(args.articles_parquet)
     prompt_template = Path(args.prompt_path).read_text(encoding="utf-8")
     output_records, report, changes = verify_submission(
@@ -112,17 +142,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         article_lookup=article_lookup,
         prompt_template=prompt_template,
         options=vars(args),
+        resume_success_by_id=resume_success_by_id,
         llm_client=lambda messages: call_openai_compatible(args.base_url, args.model, messages, args.temperature, args.timeout, disable_thinking=args.disable_thinking),
+        health_check=lambda: health_check_openai(args.base_url, args.timeout),
     )
     write_json(args.output, output_records)
     write_json(args.report, report)
-    write_jsonl(args.changes, changes)
+    if not args.write_incremental:
+        write_jsonl(args.changes, changes)
     if args.zip_output:
         write_flat_zip(args.zip_output, output_records)
     return 0
 
-def verify_submission(*, input_records: list[dict[str, Any]], fallback_by_id: dict[int, dict[str, Any]], audit_by_id: dict[int, dict[str, Any]], article_lookup: ArticleTextLookup, prompt_template: str, options: dict[str, Any], llm_client: Callable[[list[dict[str, str]]], str]) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    output: list[dict[str, Any]] = []
+def verify_submission(*, input_records: list[dict[str, Any]], fallback_by_id: dict[int, dict[str, Any]], audit_by_id: dict[int, dict[str, Any]], article_lookup: ArticleTextLookup, prompt_template: str, options: dict[str, Any], resume_success_by_id: dict[int, dict[str, Any]] | None = None, llm_client: Callable[[list[dict[str, str]]], str], health_check: Callable[[], None] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    start_time = time.monotonic()
+    resume_success_by_id = resume_success_by_id or {}
+    output_by_id: dict[int, dict[str, Any]] = {}
     changes: list[dict[str, Any]] = []
     counters: Counter[str] = Counter()
     selected_label_counts: Counter[str] = Counter()
@@ -130,44 +165,83 @@ def verify_submission(*, input_records: list[dict[str, Any]], fallback_by_id: di
     processed_domains: Counter[str] = Counter()
     fallback_domains: Counter[str] = Counter()
     domain_stats: dict[str, Counter[str]] = defaultdict(Counter)
-    processed_count = 0
-    for record in input_records:
-        record_id = int(record["id"])
-        fallback = fallback_by_id.get(record_id) or fallback_from_original(record)
-        audit = audit_by_id.get(record_id, {})
-        domain = str(audit.get("domain") or detect_domain(record.get("question", ""), record.get("answer", "")))
-        question_type = detect_question_type(str(record.get("question") or ""))
-        if not should_process_record(record, audit, options, processed_count):
-            patched = clone_submission_record(fallback)
-            ensure_non_empty_refs(patched, record)
-            output.append(patched)
-            fallback_domains[domain] += 1
-            changes.append(build_change(record, patched, mode=options["mode"], domain=domain, question_type=question_type, possible_overpruned=parse_bool(audit.get("possible_overpruned")), llm_success=False, fallback_used=True, warnings=["not processed; used fallback-pruned record"]))
-            continue
-        processed_count += 1
-        processed_domains[domain] += 1
-        try:
-            patched, change = verify_record(record=record, fallback=fallback, audit=audit, article_lookup=article_lookup, prompt_template=prompt_template, options=options, llm_client=llm_client, domain=domain, question_type=question_type)
-        except Exception as exc:
-            patched = clone_submission_record(fallback)
-            ensure_non_empty_refs(patched, record)
-            change = build_change(record, patched, mode=options["mode"], domain=domain, question_type=question_type, possible_overpruned=parse_bool(audit.get("possible_overpruned")), llm_success=False, fallback_used=True, warnings=[f"exception fallback: {exc}"])
-            change["_counters"] = {"llm_failure_count": 1, "fallback_count": 1}
-        counters.update(change.pop("_counters", {}))
-        selected_label_counts.update(change.get("selected_labels", []))
-        rejected_label_counts.update(change.get("rejected_labels", []))
-        if change.get("fallback_used"):
-            fallback_domains[domain] += 1
-            domain_stats[domain]["fallback"] += 1
-        domain_stats[domain]["processed"] += int(not change.get("fallback_used") or change.get("llm_success"))
-        domain_stats[domain]["selected"] += len(change.get("selected_labels", []))
-        domain_stats[domain]["rejected"] += len(change.get("rejected_labels", []))
-        domain_stats[domain]["articles_after"] += len(patched["relevant_articles"])
-        output.append(patched)
-        changes.append(change)
-        if float(options.get("sleep_seconds") or 0) > 0:
-            time.sleep(float(options["sleep_seconds"]))
-    report = build_report(input_records, output, changes, counters, selected_label_counts, rejected_label_counts, processed_domains, fallback_domains, domain_stats, options)
+    chunk_records = [record for record in input_records if is_in_chunk(int(record["id"]), options.get("start_id"), options.get("end_id"))]
+    attemptable_records = [record for record in chunk_records if should_process_record(record, audit_by_id.get(int(record["id"]), {}), options, 0)]
+    total_to_process = min(len(attemptable_records), int(options["limit"])) if options.get("limit") is not None else len(attemptable_records)
+    print_start(input_records, total_to_process, options)
+
+    incremental_file = open_incremental_changes(options) if options.get("write_incremental") else None
+    newly_processed = 0
+    attempted_llm = 0
+    try:
+        for record in input_records:
+            record_id = int(record["id"])
+            fallback = fallback_by_id.get(record_id) or fallback_from_original(record)
+            audit = audit_by_id.get(record_id, {})
+            domain = str(audit.get("domain") or detect_domain(record.get("question", ""), record.get("answer", "")))
+            question_type = detect_question_type(str(record.get("question") or ""))
+
+            if record_id in resume_success_by_id:
+                patched = apply_success_change(fallback, resume_success_by_id[record_id])
+                output_by_id[record_id] = patched
+                counters["resumed_success_count"] += 1
+                print(f"[RESUME] id={record_id} reused_success=true articles={len(patched['relevant_articles'])} docs={len(patched['relevant_docs'])}", flush=True)
+                continue
+
+            if not should_process_record(record, audit, options, newly_processed):
+                patched = clone_submission_record(fallback)
+                ensure_non_empty_refs(patched, record)
+                output_by_id[record_id] = patched
+                fallback_domains[domain] += 1
+                continue
+
+            newly_processed += 1
+            attempted_llm += 1
+            processed_domains[domain] += 1
+            record_start = time.monotonic()
+            retry_state = {"retries": 0}
+            retrying_client = build_retrying_client(record_id, llm_client, health_check, options, counters, retry_state)
+            try:
+                patched, change = verify_record(record=record, fallback=fallback, audit=audit, article_lookup=article_lookup, prompt_template=prompt_template, options=options, llm_client=retrying_client, domain=domain, question_type=question_type)
+            except Exception as exc:
+                patched = clone_submission_record(fallback)
+                ensure_non_empty_refs(patched, record)
+                change = build_change(record, patched, mode=options["mode"], domain=domain, question_type=question_type, possible_overpruned=parse_bool(audit.get("possible_overpruned")), llm_success=False, fallback_used=True, warnings=[f"exception fallback: {exc}"])
+                change["_counters"] = {"llm_failure_count": 1, "request_failure_count": 1, "fallback_count": 1}
+            elapsed_sec = round(time.monotonic() - record_start, 3)
+            change["retries"] = retry_state["retries"]
+            change["elapsed_sec"] = elapsed_sec
+            change["after_docs"] = list(patched.get("relevant_docs") or [])
+            change_counters = change.pop("_counters", {})
+            counters.update(change_counters)
+            selected_label_counts.update(change.get("selected_labels", []))
+            rejected_label_counts.update(change.get("rejected_labels", []))
+            if change.get("fallback_used"):
+                fallback_domains[domain] += 1
+                domain_stats[domain]["fallback"] += 1
+            domain_stats[domain]["processed"] += 1
+            domain_stats[domain]["selected"] += len(change.get("selected_labels", []))
+            domain_stats[domain]["rejected"] += len(change.get("rejected_labels", []))
+            domain_stats[domain]["articles_after"] += len(patched["relevant_articles"])
+            output_by_id[record_id] = patched
+            changes.append(change)
+            write_incremental_change(incremental_file, change)
+            print_record_progress(record_id, change, retry_state["retries"], elapsed_sec)
+            if should_print_progress(newly_processed, options):
+                print_progress(newly_processed, total_to_process, record_id, counters, start_time)
+            if should_checkpoint(newly_processed, options):
+                current_output = materialize_output(input_records, fallback_by_id, output_by_id)
+                current_report = build_report(input_records, current_output, changes, counters, selected_label_counts, rejected_label_counts, processed_domains, fallback_domains, domain_stats, options, start_time=start_time, attempted_llm_count=attempted_llm)
+                write_checkpoint(options, current_output, current_report, newly_processed)
+            if float(options.get("sleep_seconds") or 0) > 0:
+                time.sleep(float(options["sleep_seconds"]))
+    finally:
+        if incremental_file is not None:
+            incremental_file.close()
+
+    output = materialize_output(input_records, fallback_by_id, output_by_id)
+    report = build_report(input_records, output, changes, counters, selected_label_counts, rejected_label_counts, processed_domains, fallback_domains, domain_stats, options, start_time=start_time, attempted_llm_count=attempted_llm)
+    print_done(newly_processed, counters, start_time, options)
     return output, report, changes
 
 def verify_record(*, record: dict[str, Any], fallback: dict[str, Any], audit: dict[str, Any], article_lookup: ArticleTextLookup, prompt_template: str, options: dict[str, Any], llm_client: Callable[[list[dict[str, str]]], str], domain: str, question_type: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -188,7 +262,10 @@ def verify_record(*, record: dict[str, Any], fallback: dict[str, Any], audit: di
         counters["llm_success_count"] += 1
     except Exception as exc:
         counters["llm_failure_count"] += 1
-        counters["json_parse_failure_count"] += 1
+        if isinstance(exc, RequestFailure):
+            counters["request_failure_count"] += 1
+        else:
+            counters["json_parse_failure_count"] += 1
         patched = fallback_or_top_original(record, fallback)
         change = build_change(record, patched, mode=options["mode"], domain=domain, question_type=question_type, possible_overpruned=parse_bool(audit.get("possible_overpruned")), llm_success=False, fallback_used=True, warnings=warnings + [f"LLM/JSON failure fallback: {exc}"])
         change["_counters"] = {**counters, "fallback_count": 1}
@@ -494,17 +571,21 @@ def should_process_record(record: dict[str, Any], audit: dict[str, Any], options
     return True
 
 def build_change(record: dict[str, Any], patched: dict[str, Any], *, mode: str, domain: str, question_type: str, possible_overpruned: bool, llm_success: bool, fallback_used: bool, warnings: list[str]) -> dict[str, Any]:
-    return {"id": record["id"], "mode": mode, "domain": domain, "question_type": question_type, "possible_overpruned": possible_overpruned, "llm_success": llm_success, "fallback_used": fallback_used, "before_articles": list(record.get("relevant_articles") or []), "after_articles": list(patched.get("relevant_articles") or []), "selected_labels": [], "rejected_labels": [], "missing_article_text_refs": [], "warnings": warnings}
+    return {"id": record["id"], "mode": mode, "domain": domain, "question_type": question_type, "possible_overpruned": possible_overpruned, "llm_success": llm_success, "fallback_used": fallback_used, "before_articles": list(record.get("relevant_articles") or []), "after_articles": list(patched.get("relevant_articles") or []), "after_docs": list(patched.get("relevant_docs") or []), "selected_labels": [], "rejected_labels": [], "missing_article_text_refs": [], "warnings": warnings, "retries": 0, "elapsed_sec": 0.0}
 
-def build_report(input_records: list[dict[str, Any]], output_records: list[dict[str, Any]], changes: list[dict[str, Any]], counters: Counter[str], selected_label_counts: Counter[str], rejected_label_counts: Counter[str], processed_domains: Counter[str], fallback_domains: Counter[str], domain_stats: dict[str, Counter[str]], options: dict[str, Any]) -> dict[str, Any]:
+def build_report(input_records: list[dict[str, Any]], output_records: list[dict[str, Any]], changes: list[dict[str, Any]], counters: Counter[str], selected_label_counts: Counter[str], rejected_label_counts: Counter[str], processed_domains: Counter[str], fallback_domains: Counter[str], domain_stats: dict[str, Counter[str]], options: dict[str, Any], *, start_time: float | None = None, attempted_llm_count: int = 0, merge_only: bool = False) -> dict[str, Any]:
     domain_summary: dict[str, dict[str, Any]] = {}
     for domain in sorted(set(processed_domains) | set(fallback_domains) | set(domain_stats)):
         stats = domain_stats.get(domain, Counter())
         processed = int(stats.get("processed", 0))
         domain_summary[domain] = {"processed": processed, "fallback": int(stats.get("fallback", 0)) + int(fallback_domains.get(domain, 0)), "avg_articles_after": round(float(stats.get("articles_after", 0)) / processed, 4) if processed else 0.0, "selected": int(stats.get("selected", 0)), "rejected": int(stats.get("rejected", 0))}
+    elapsed = (time.monotonic() - start_time) if start_time is not None else 0.0
+    processed_in_chunk = len([change for change in changes if not change.get("resumed_only")])
+    partial_output = str(options.get("output")) + ".partial" if int(options.get("checkpoint_every") or 0) > 0 else None
+    partial_report = str(options.get("report")) + ".partial" if int(options.get("checkpoint_every") or 0) > 0 else None
     return {
         "total_records": len(output_records), "mode": options["mode"], "max_candidates": int(options["max_candidates"]), "max_article_chars": int(options["max_article_chars"]),
-        "records_changed": sum(change["before_articles"] != change["after_articles"] for change in changes),
+        "records_changed": sum(change.get("before_articles") != change.get("after_articles") for change in changes),
         "llm_success_count": int(counters.get("llm_success_count", 0)), "llm_failure_count": int(counters.get("llm_failure_count", 0)), "json_parse_failure_count": int(counters.get("json_parse_failure_count", 0)),
         "fallback_count": sum(bool(change.get("fallback_used")) for change in changes), "empty_selection_fallback_count": int(counters.get("empty_selection_fallback_count", 0)), "invalid_candidate_id_count": int(counters.get("invalid_candidate_id_count", 0)),
         "avg_docs_before": average(len(record.get("relevant_docs") or []) for record in input_records), "avg_docs_after": average(len(record.get("relevant_docs") or []) for record in output_records),
@@ -512,6 +593,11 @@ def build_report(input_records: list[dict[str, Any]], output_records: list[dict[
         "selected_articles_count": int(counters.get("selected_articles_count", 0)), "rejected_articles_count": int(counters.get("rejected_articles_count", 0)), "missing_article_text_count": int(counters.get("missing_article_text_count", 0)),
         "processed_possible_overpruned_count": sum(bool(change.get("possible_overpruned")) and not change.get("fallback_used") for change in changes),
         "processed_domain_counts": dict(sorted(processed_domains.items())), "fallback_domain_counts": dict(sorted(fallback_domains.items())), "label_counts_selected": dict(sorted(selected_label_counts.items())), "label_counts_rejected": dict(sorted(rejected_label_counts.items())), "domain_summary": domain_summary,
+        "chunk_start_id": options.get("start_id"), "chunk_end_id": options.get("end_id"), "processed_in_chunk_count": processed_in_chunk, "resumed_success_count": int(counters.get("resumed_success_count", 0)),
+        "attempted_llm_count": attempted_llm_count, "request_failure_count": int(counters.get("request_failure_count", 0)), "retry_count": int(counters.get("retry_count", 0)), "server_error_count": int(counters.get("server_error_count", 0)),
+        "merge_only": merge_only, "progress_every": int(options.get("progress_every") or 10), "write_incremental": bool(options.get("write_incremental")), "checkpoint_every": int(options.get("checkpoint_every") or 0),
+        "incremental_changes_path": options.get("changes") if options.get("write_incremental") else None, "partial_output_path": partial_output, "partial_report_path": partial_report,
+        "elapsed_sec": round(elapsed, 3), "avg_sec_per_record": round(elapsed / processed_in_chunk, 3) if processed_in_chunk else 0.0,
     }
 
 def load_submission(path: str | Path) -> list[dict[str, Any]]:
@@ -590,9 +676,208 @@ def write_flat_zip(path: str | Path, records: list[dict[str, Any]]) -> None:
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("results.json", json.dumps(records, ensure_ascii=False, indent=2))
 
+
+
+
+
+
+
+
+
+
+def load_resume_success_changes(path: str | Path) -> dict[int, dict[str, Any]]:
+    success: dict[int, dict[str, Any]] = {}
+    resume_path = Path(path)
+    if not resume_path.exists():
+        return success
+    with resume_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("llm_success") is True and row.get("fallback_used") is False and row.get("after_articles"):
+                success[int(row["id"])] = row
+    return success
+
+
+def apply_success_change(base_record: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
+    patched = clone_submission_record(base_record)
+    patched["relevant_articles"] = list(change.get("after_articles") or [])
+    patched["relevant_docs"] = list(change.get("after_docs") or []) or rebuild_docs_from_articles(patched["relevant_articles"])
+    ensure_non_empty_refs(patched, base_record)
+    return patched
+
+
+def merge_changes_output(*, input_records: list[dict[str, Any]], fallback_by_id: dict[int, dict[str, Any]], resume_success_by_id: dict[int, dict[str, Any]], options: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+    start_time = time.monotonic()
+    output: list[dict[str, Any]] = []
+    changes: list[dict[str, Any]] = []
+    for record in input_records:
+        record_id = int(record["id"])
+        fallback = fallback_by_id.get(record_id) or fallback_from_original(record)
+        if record_id in resume_success_by_id:
+            patched = apply_success_change(fallback, resume_success_by_id[record_id])
+            changes.append(resume_success_by_id[record_id])
+        else:
+            patched = clone_submission_record(fallback)
+            ensure_non_empty_refs(patched, record)
+        output.append(patched)
+    counters = Counter({"resumed_success_count": len(resume_success_by_id)})
+    report = build_report(input_records, output, changes, counters, Counter(), Counter(), Counter(), Counter(), defaultdict(Counter), options, start_time=start_time, attempted_llm_count=0, merge_only=True)
+    return output, report, changes
+
+
+def is_in_chunk(record_id: int, start_id: Any, end_id: Any) -> bool:
+    if start_id is not None and record_id < int(start_id):
+        return False
+    if end_id is not None and record_id > int(end_id):
+        return False
+    return True
+
+
+def build_retrying_client(record_id: int, llm_client: Callable[[list[dict[str, str]]], str], health_check: Callable[[], None] | None, options: dict[str, Any], counters: Counter[str], retry_state: dict[str, int]) -> Callable[[list[dict[str, str]]], str]:
+    def call(messages: list[dict[str, str]]) -> str:
+        max_retries = int(options.get("max_retries") or 0)
+        sleep_seconds = float(options.get("retry_sleep_seconds") or 0)
+        for attempt in range(max_retries + 1):
+            try:
+                if options.get("health_check_before_call") and health_check is not None:
+                    run_health_check_with_retries(record_id, health_check, max_retries, sleep_seconds, counters)
+                return llm_client(messages)
+            except Exception as exc:
+                if not is_transient_error(exc) or attempt >= max_retries:
+                    counters["server_error_count"] += int(is_server_error(exc))
+                    raise RequestFailure(str(exc)) from exc
+                retry_state["retries"] += 1
+                counters["retry_count"] += 1
+                print(f"[RETRY] id={record_id} attempt={attempt + 1}/{max_retries} reason={json.dumps(str(exc), ensure_ascii=False)} sleep={sleep_seconds:g}", flush=True)
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
+        raise RequestFailure("retry loop exhausted")
+    return call
+
+
+def run_health_check_with_retries(record_id: int, health_check: Callable[[], None], max_retries: int, sleep_seconds: float, counters: Counter[str]) -> None:
+    for attempt in range(max_retries + 1):
+        start = time.monotonic()
+        try:
+            health_check()
+            print(f"[HEALTH] ok latency_sec={time.monotonic() - start:.2f}", flush=True)
+            return
+        except Exception as exc:
+            if not is_transient_error(exc) or attempt >= max_retries:
+                raise
+            counters["retry_count"] += 1
+            print(f"[HEALTH] failed attempt={attempt + 1}/{max_retries} reason={json.dumps(str(exc), ensure_ascii=False)}", flush=True)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+
+def health_check_openai(base_url: str, timeout: float) -> None:
+    request = urllib.request.Request(base_url.rstrip("/") + "/models", method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        response.read()
+
+
+def is_transient_error(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    transient = ("connection refused", "connection reset", "remote end closed", "timed out", "timeout", "502", "503", "504", "socket timeout", "read timeout")
+    non_transient = ("400", "401", "404", "model not found", "invalid request")
+    return any(item in text for item in transient) and not any(item in text for item in non_transient)
+
+
+def is_server_error(exc: Exception) -> bool:
+    text = str(exc)
+    return any(code in text for code in ("502", "503", "504"))
+
+
+def materialize_output(input_records: list[dict[str, Any]], fallback_by_id: dict[int, dict[str, Any]], output_by_id: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in input_records:
+        record_id = int(record["id"])
+        row = output_by_id.get(record_id) or clone_submission_record(fallback_by_id.get(record_id) or fallback_from_original(record))
+        ensure_non_empty_refs(row, record)
+        rows.append(row)
+    return rows
+
+
+def open_incremental_changes(options: dict[str, Any]):
+    path = Path(options["changes"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not options.get("resume_from_changes") or Path(str(options.get("resume_from_changes"))) != path:
+        path.write_text("", encoding="utf-8")
+    return path.open("a", encoding="utf-8")
+
+
+def write_incremental_change(file: Any, change: dict[str, Any]) -> None:
+    if file is None:
+        return
+    clean = {key: value for key, value in change.items() if not key.startswith("_")}
+    file.write(json.dumps(clean, ensure_ascii=False) + "\n")
+    file.flush()
+    try:
+        os.fsync(file.fileno())
+    except OSError:
+        pass
+
+
+def should_print_progress(processed: int, options: dict[str, Any]) -> bool:
+    every = max(1, int(options.get("progress_every") or 10))
+    return processed == 1 or processed % every == 0
+
+
+def should_checkpoint(processed: int, options: dict[str, Any]) -> bool:
+    every = int(options.get("checkpoint_every") or 0)
+    return every > 0 and processed > 0 and processed % every == 0
+
+
+def write_checkpoint(options: dict[str, Any], output: list[dict[str, Any]], report: dict[str, Any], processed: int) -> None:
+    output_path = Path(str(options["output"]) + ".partial")
+    report_path = Path(str(options["report"]) + ".partial")
+    write_json(output_path, output)
+    write_json(report_path, report)
+    print(f"[CHECKPOINT] processed={processed} wrote_output={output_path} wrote_report={report_path}", flush=True)
+
+
+def print_start(input_records: list[dict[str, Any]], total_to_process: int, options: dict[str, Any]) -> None:
+    chunk_start = options.get("start_id") if options.get("start_id") is not None else "first"
+    chunk_end = options.get("end_id") if options.get("end_id") is not None else "last"
+    print(f"[START] total_records={len(input_records)} mode={options['mode']} chunk={chunk_start}-{chunk_end} max_candidates={options['max_candidates']} max_article_chars={options['max_article_chars']} disable_thinking={str(bool(options.get('disable_thinking'))).lower()} to_process={total_to_process}", flush=True)
+
+
+def print_record_progress(record_id: int, change: dict[str, Any], retries: int, elapsed_sec: float) -> None:
+    status = "success" if change.get("llm_success") and not change.get("fallback_used") else "fallback"
+    if status == "success":
+        print(f"[RECORD] id={record_id} status=success selected={len(change.get('selected_labels', []))} rejected={len(change.get('rejected_labels', []))} retries={retries} elapsed_sec={elapsed_sec:.1f}", flush=True)
+    else:
+        reason = "; ".join(str(item) for item in change.get("warnings", [])[-1:])
+        print(f"[RECORD] id={record_id} status=fallback reason={json.dumps(reason, ensure_ascii=False)} retries={retries} elapsed_sec={elapsed_sec:.1f}", flush=True)
+
+
+def print_progress(processed: int, total: int, record_id: int, counters: Counter[str], start_time: float) -> None:
+    elapsed = time.monotonic() - start_time
+    avg = elapsed / processed if processed else 0.0
+    remaining = max(0, total - processed)
+    eta = remaining * avg
+    print(f"[PROGRESS] processed={processed}/{total} global_id={record_id} success={int(counters.get('llm_success_count', 0))} failure={int(counters.get('llm_failure_count', 0))} fallback={int(counters.get('fallback_count', 0))} elapsed={format_duration(elapsed)} avg_sec_per_record={avg:.1f} eta={format_duration(eta)}", flush=True)
+
+
+def print_done(processed: int, counters: Counter[str], start_time: float, options: dict[str, Any]) -> None:
+    elapsed = time.monotonic() - start_time
+    print(f"[DONE] processed={processed} success={int(counters.get('llm_success_count', 0))} request_failure={int(counters.get('request_failure_count', 0))} json_parse_failure={int(counters.get('json_parse_failure_count', 0))} fallback={int(counters.get('fallback_count', 0))} elapsed={format_duration(elapsed)} output={options.get('output')} zip={options.get('zip_output')}", flush=True)
+
+
+def format_duration(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 
 
