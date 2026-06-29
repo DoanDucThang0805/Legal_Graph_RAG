@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--start-id", type=int, default=None)
     parser.add_argument("--end-id", type=int, default=None)
+    parser.add_argument("--ids-file", default=None)
     parser.add_argument("--resume-from-changes", default=None)
     parser.add_argument("--write-incremental", action="store_true")
     parser.add_argument("--checkpoint-every", type=int, default=0)
@@ -165,7 +166,10 @@ def verify_submission(*, input_records: list[dict[str, Any]], fallback_by_id: di
     processed_domains: Counter[str] = Counter()
     fallback_domains: Counter[str] = Counter()
     domain_stats: dict[str, Counter[str]] = defaultdict(Counter)
-    chunk_records = [record for record in input_records if is_in_chunk(int(record["id"]), options.get("start_id"), options.get("end_id"))]
+    ids_filter = load_ids_file(options.get("ids_file")) if options.get("ids_file") else None
+    options["_ids_set"] = ids_filter
+    options["_ids_file_count"] = len(ids_filter) if ids_filter is not None else None
+    chunk_records = [record for record in input_records if is_in_chunk(int(record["id"]), options.get("start_id"), options.get("end_id")) and is_in_ids_filter(int(record["id"]), ids_filter)]
     attemptable_records = [record for record in chunk_records if should_process_record(record, audit_by_id.get(int(record["id"]), {}), options, 0)]
     total_to_process = min(len(attemptable_records), int(options["limit"])) if options.get("limit") is not None else len(attemptable_records)
     print_start(input_records, total_to_process, options)
@@ -556,6 +560,9 @@ def ensure_non_empty_refs(patched: dict[str, Any], original: dict[str, Any]) -> 
 
 def should_process_record(record: dict[str, Any], audit: dict[str, Any], options: dict[str, Any], processed_count: int) -> bool:
     record_id = int(record["id"])
+    ids_filter = options.get("_ids_set")
+    if not is_in_ids_filter(record_id, ids_filter):
+        return False
     if options.get("start_id") is not None and record_id < int(options["start_id"]):
         return False
     if options.get("end_id") is not None and record_id > int(options["end_id"]):
@@ -593,7 +600,7 @@ def build_report(input_records: list[dict[str, Any]], output_records: list[dict[
         "selected_articles_count": int(counters.get("selected_articles_count", 0)), "rejected_articles_count": int(counters.get("rejected_articles_count", 0)), "missing_article_text_count": int(counters.get("missing_article_text_count", 0)),
         "processed_possible_overpruned_count": sum(bool(change.get("possible_overpruned")) and not change.get("fallback_used") for change in changes),
         "processed_domain_counts": dict(sorted(processed_domains.items())), "fallback_domain_counts": dict(sorted(fallback_domains.items())), "label_counts_selected": dict(sorted(selected_label_counts.items())), "label_counts_rejected": dict(sorted(rejected_label_counts.items())), "domain_summary": domain_summary,
-        "chunk_start_id": options.get("start_id"), "chunk_end_id": options.get("end_id"), "processed_in_chunk_count": processed_in_chunk, "resumed_success_count": int(counters.get("resumed_success_count", 0)),
+        "chunk_start_id": options.get("start_id"), "chunk_end_id": options.get("end_id"), "ids_file": options.get("ids_file"), "ids_file_count": options.get("_ids_file_count"), "processed_in_chunk_count": processed_in_chunk, "resumed_success_count": int(counters.get("resumed_success_count", 0)),
         "attempted_llm_count": attempted_llm_count, "request_failure_count": int(counters.get("request_failure_count", 0)), "retry_count": int(counters.get("retry_count", 0)), "server_error_count": int(counters.get("server_error_count", 0)),
         "merge_only": merge_only, "progress_every": int(options.get("progress_every") or 10), "write_incremental": bool(options.get("write_incremental")), "checkpoint_every": int(options.get("checkpoint_every") or 0),
         "incremental_changes_path": options.get("changes") if options.get("write_incremental") else None, "partial_output_path": partial_output, "partial_report_path": partial_report,
@@ -730,6 +737,23 @@ def merge_changes_output(*, input_records: list[dict[str, Any]], fallback_by_id:
     return output, report, changes
 
 
+
+def load_ids_file(path: str | Path) -> set[int]:
+    ids: set[int] = set()
+    for line_no, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            ids.add(int(stripped))
+        except ValueError as exc:
+            raise ValueError(f"invalid id in ids-file at line {line_no}: {stripped}") from exc
+    return ids
+
+
+def is_in_ids_filter(record_id: int, ids_filter: set[int] | None) -> bool:
+    return ids_filter is None or record_id in ids_filter
+
 def is_in_chunk(record_id: int, start_id: Any, end_id: Any) -> bool:
     if start_id is not None and record_id < int(start_id):
         return False
@@ -845,7 +869,7 @@ def write_checkpoint(options: dict[str, Any], output: list[dict[str, Any]], repo
 def print_start(input_records: list[dict[str, Any]], total_to_process: int, options: dict[str, Any]) -> None:
     chunk_start = options.get("start_id") if options.get("start_id") is not None else "first"
     chunk_end = options.get("end_id") if options.get("end_id") is not None else "last"
-    print(f"[START] total_records={len(input_records)} mode={options['mode']} chunk={chunk_start}-{chunk_end} max_candidates={options['max_candidates']} max_article_chars={options['max_article_chars']} disable_thinking={str(bool(options.get('disable_thinking'))).lower()} to_process={total_to_process}", flush=True)
+    print(f"[START] total_records={len(input_records)} mode={options['mode']} chunk={chunk_start}-{chunk_end} target_count={total_to_process} max_candidates={options['max_candidates']} max_article_chars={options['max_article_chars']} disable_thinking={str(bool(options.get('disable_thinking'))).lower()} to_process={total_to_process}", flush=True)
 
 
 def print_record_progress(record_id: int, change: dict[str, Any], retries: int, elapsed_sec: float) -> None:
@@ -878,6 +902,8 @@ def format_duration(seconds: float) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
 
 

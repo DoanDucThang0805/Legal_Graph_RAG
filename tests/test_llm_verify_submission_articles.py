@@ -372,3 +372,53 @@ def test_report_contains_progress_resume_retry_fields() -> None:
     for field in ("chunk_start_id", "chunk_end_id", "processed_in_chunk_count", "resumed_success_count", "attempted_llm_count", "request_failure_count", "retry_count", "merge_only", "progress_every", "write_incremental", "checkpoint_every", "incremental_changes_path", "partial_output_path", "partial_report_path", "elapsed_sec", "avg_sec_per_record"):
         assert field in report
 
+
+
+def test_ids_file_processes_only_listed_ids_but_outputs_all_records(tmp_path: Path) -> None:
+    module = load_module()
+    articles = [article("01/2020/QH14", "Luật A", "Điều 1"), article("02/2020/QH14", "Luật B", "Điều 2")]
+    records = [record(articles, record_id=i) for i in range(1, 5)]
+    fallbacks = [record([articles[0]], record_id=i) for i in range(1, 5)]
+    ids_file = tmp_path / "ids.txt"
+    ids_file.write_text("2\n4\n", encoding="utf-8")
+    opts = options(); opts.update({"ids_file": str(ids_file)})
+    calls = {"count": 0}
+
+    def llm(_messages: Any) -> str:
+        calls["count"] += 1
+        return '{"selected": [{"candidate_id": 2, "label": "direct_relevant", "confidence": 0.9}], "rejected": []}'
+
+    output, report, changes = verify_sample(module, records, fallbacks, opts, llm)
+
+    assert len(output) == 4
+    assert calls["count"] == 2
+    assert [change["id"] for change in changes] == [2, 4]
+    assert output[0]["relevant_articles"] == [articles[0]]
+    assert output[1]["relevant_articles"] == [articles[1]]
+    assert output[3]["relevant_articles"] == [articles[1]]
+    assert report["ids_file"] == str(ids_file)
+    assert report["ids_file_count"] == 2
+
+
+def test_ids_file_intersects_with_start_end_range(tmp_path: Path) -> None:
+    module = load_module()
+    articles = [article("01/2020/QH14", "Luật A", "Điều 1"), article("02/2020/QH14", "Luật B", "Điều 2")]
+    records = [record(articles, record_id=i) for i in range(1, 5)]
+    fallbacks = [record([articles[0]], record_id=i) for i in range(1, 5)]
+    ids_file = tmp_path / "ids.txt"
+    ids_file.write_text("2\n4\n", encoding="utf-8")
+    opts = options(); opts.update({"ids_file": str(ids_file), "start_id": 3, "end_id": 4})
+    calls = {"count": 0}
+
+    def llm(_messages: Any) -> str:
+        calls["count"] += 1
+        return '{"selected": [{"candidate_id": 2, "label": "direct_relevant", "confidence": 0.9}], "rejected": []}'
+
+    output, report, changes = verify_sample(module, records, fallbacks, opts, llm)
+
+    assert len(output) == 4
+    assert calls["count"] == 1
+    assert [change["id"] for change in changes] == [4]
+    assert output[1]["relevant_articles"] == [articles[0]]
+    assert output[3]["relevant_articles"] == [articles[1]]
+    assert report["ids_file_count"] == 2
